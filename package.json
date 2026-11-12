@@ -1,0 +1,16 @@
+{
+  "name": "zhimu-story-canvas",
+  "version": "0.1.0",
+  "private": true,
+  "description": "枝幕 · 面向剧本开发的多模型故事画布",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.8",
+    "@phosphor-icons/web": "^2.1.2",
+    "docx": "^9.15.3",
+    "pdfkit": "^0.20.2"
+  }
+}
