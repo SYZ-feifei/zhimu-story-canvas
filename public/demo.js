@@ -2,12 +2,18 @@ import { makeNode } from './story.js';
 
 export function demoProject() {
   return {
-    schema: 1, id: 'rain-demo', title: '雨夜失物招领', format: '短片', cover: 'rain',
+    schema: 1, id: 'rain-demo', title: '雨夜失物招领', format: '短片', cover: 'rain', method: 'reverse-four',
     premise: '车站停运前十分钟，一把红伞让值班员林栀发现，一份本该留档的认领记录被人抹掉了。',
     constraints: '故事发生在末班车驶离前的失物招领处。主要人物是林栀、来客和站长。红伞贯穿全片。',
     mainline: ['opening', 'pressure', 'reveal', 'payoff'],
-    links: [], proposals: [], analysisNotes: '', sourceName: '',
+    links: [
+      ['demo-premise', 'opening'], ['demo-setting', 'opening'], ['opening', 'pressure'], ['pressure', 'reveal'],
+      ['reveal', 'payoff'], ['pressure', 'option-witness'], ['pressure', 'option-rule'],
+    ].map(([from, to]) => ({ from, to })), proposals: [], analysisNotes: '', sourceName: '', referenceNodesMigrated: true,
+    referenceNodeIds: { premise: 'demo-premise', constraints: 'demo-setting' },
     nodes: [
+      { id: 'demo-premise', kind: 'text', title: '项目梗概', script: '车站停运前十分钟，一把红伞让值班员林栀发现，一份本该留档的认领记录被人抹掉了。', x: -250, y: 0 },
+      { id: 'demo-setting', kind: 'setting', title: '共享设定', script: '故事发生在末班车驶离前的失物招领处。主要人物是林栀、来客和站长。红伞贯穿全片。', x: -250, y: 218 },
       { id: 'opening', beat: 'A', title: '最后一张认领单', action: '铁帘落到一半，林栀伸手从碎纸口抽回一张湿透的认领单。',
         reason: '交班前她必须清点未领物品。认领单的存根撕口让她停下碎纸机。', consequence: '她按住铁帘开关，把最后一个来客留在窗口。',
         clue: '认领单有两联，存根带编号与签名。', valence: -1, tension: 3, emotionNote: '停运前的异常制造轻度不安。', x: 0, y: 0 },
@@ -30,6 +36,6 @@ export function demoProject() {
         reason: '归档时必须给物品加印。来客所谓的遗失日期早于封存时间。', consequence: '林栀能用当班记录反驳站长，前半段需要交代封存规则。',
         clue: '同一枚印章在纸面和伞布上重复出现。', tradeoff: '开场增加一次盖章动作，结尾改为让来客拍下伞布印记。',
         valence: 0, tension: 9, emotionNote: '毁证动作压缩了揭晓时间。', origin: 'reveal', x: 578, y: 238 },
-    ].map(makeNode),
+    ].map(node => makeNode({ ...node, methodStage: node.beat ? `reverse-${node.beat.toLowerCase()}` : '' })),
   };
 }

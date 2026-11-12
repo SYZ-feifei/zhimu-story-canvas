@@ -27,8 +27,8 @@ export function field(name, label, value = '', options = {}) {
 }
 
 export function canvasContext(canvas, width, height) {
-  const dpi = Math.min(window.devicePixelRatio || 1, 2);
-  const pixels = [Math.round(width * dpi), Math.round(height * dpi)];
+  const dpi = Math.min(window.devicePixelRatio || 1, 2, 16384 / Math.max(1, width, height));
+  const pixels = [Math.max(1, Math.round(width * dpi)), Math.max(1, Math.round(height * dpi))];
   if (canvas.width !== pixels[0] || canvas.height !== pixels[1]) [canvas.width, canvas.height] = pixels;
   const context = canvas.getContext('2d');
   context.setTransform(dpi, 0, 0, dpi, 0, 0);

@@ -1,3 +1,5 @@
+import { methodFor, normalizeStage } from './methods.js';
+
 export const BEATS = {
   A: { name: '失衡开场', short: '开场', color: 'blue', hint: '用一个反常动作入戏，埋下后来会变义的细节。' },
   B: { name: '误导与施压', short: '施压', color: 'amber', hint: '改变角色的处境，让观众依据真实线索得出暂时的误判。' },
@@ -15,17 +17,30 @@ export const PROVIDERS = {
   gemini: { label: 'Gemini', base: 'https://generativelanguage.googleapis.com/v1beta' },
   ollama: { label: 'Ollama', base: 'http://127.0.0.1:11434/v1' },
 };
-export const ANGLES = { beat: '节拍变体', character: '人物博弈', cause: '因果补强' };
+export const NODE_TYPES = {
+  text: { label: '文本', icon: 'text-aa', title: '文本节点' },
+  note: { label: '便签', icon: 'note', title: '便签' },
+  setting: { label: '共享设定', icon: 'bookmark-simple', title: '共享设定' },
+  plot: { label: '剧情', icon: 'film-strip', title: '剧情节点' },
+  agent: { label: 'Agent', icon: 'sparkle', title: 'Agent' },
+};
+export const PROMPT_LIMIT = 8000;
 export const NODE_WIDTH = 192;
 export const NODE_HEIGHT = 148;
 export const COLUMN = 230;
 export const NODE_LIMIT = 500;
+export const LINK_LIMIT = 1500;
+export const STROKE_LIMIT = 250;
+export const STROKE_POINTS = 450;
 
 const idPattern = /^[a-zA-Z0-9_-]{1,90}$/;
 export const newId = () => globalThis.crypto.randomUUID();
 export const cleanText = (value, limit) => typeof value === 'string' ? value.slice(0, limit).trim() : '';
 export const beatName = (beat) => BEATS[beat]?.name ?? BEATS.scene.name;
-export const mainlineNodes = (project) => project.mainline.map(id => project.nodes.find(node => node.id === id)).filter(Boolean);
+export function mainlineNodes(project) {
+  const nodes = new Map(project.nodes.map(node => [node.id, node]));
+  return project.mainline.map(id => nodes.get(id)).filter(Boolean);
+}
 export const beatNode = (project, beat) => mainlineNodes(project).find(node => node.beat === beat);
 
 export function score(value, min, max) {
@@ -52,8 +67,11 @@ export function plotContent(raw = {}) {
 export function makeNode(raw = {}) {
   return {
     id: idPattern.test(raw.id ?? '') ? raw.id : newId(),
+    kind: Object.hasOwn(NODE_TYPES, raw.kind) ? raw.kind : 'plot',
     beat: Object.hasOwn(BEATS, raw.beat) ? raw.beat : 'scene',
+    methodStage: normalizeStage(raw.methodStage),
     ...plotContent(raw),
+    prompt: cleanText(raw.prompt, PROMPT_LIMIT),
     modelId: idPattern.test(raw.modelId ?? '') ? raw.modelId : null,
     modelSource: cleanText(raw.modelSource, 120),
     origin: idPattern.test(raw.origin ?? '') ? raw.origin : null,
@@ -68,14 +86,19 @@ export function newProject(raw = {}) {
     id: newId(),
     title: cleanText(raw.title, 100) || '未命名故事',
     format: FORMATS.includes(raw.format) ? raw.format : '短片',
+    method: methodFor(raw.method).id,
     premise: cleanText(raw.premise, 5000),
     constraints: cleanText(raw.constraints, 5000),
     analysisNotes: cleanText(raw.analysisNotes, 4000),
     sourceName: cleanText(raw.sourceName, 255),
     cover: null,
+    referenceNodesMigrated: false,
+    referenceNodeIds: {},
     nodes: [],
     mainline: [],
     links: [],
+    groups: [],
+    strokes: [],
     proposals: [],
   };
 }
@@ -84,7 +107,7 @@ export function normalizeProject(raw) {
   if (!raw || raw.schema !== 1 || !Array.isArray(raw.nodes) || !Array.isArray(raw.mainline) || !Array.isArray(raw.links)) {
     throw new Error('请选择枝幕导出的项目 JSON。');
   }
-  if (raw.nodes.length > NODE_LIMIT || raw.links.length > 1500) throw new Error('项目中的节点或连线超出导入上限。');
+  if (raw.nodes.length > NODE_LIMIT || raw.links.length > LINK_LIMIT) throw new Error('项目中的节点或连线超出导入上限。');
   const nodes = [];
   const ids = new Set();
   for (const item of raw.nodes) {
@@ -98,17 +121,34 @@ export function normalizeProject(raw) {
   const mainline = [];
   for (const id of new Set(raw.mainline)) {
     const node = nodes.find(item => item.id === id);
-    if (!node || (node.beat !== 'scene' && seenBeats.has(node.beat))) continue;
+    if (!node || node.kind !== 'plot' || (node.beat !== 'scene' && seenBeats.has(node.beat))) continue;
     seenBeats.add(node.beat);
     mainline.push(id);
   }
   const links = [];
+  const linkIds = new Set();
   for (const link of raw.links) {
     if (!link || link.from === link.to || !ids.has(link.from) || !ids.has(link.to)) continue;
-    if (!links.some(existing => existing.from === link.from && existing.to === link.to)) {
+    const key = `${link.from}/${link.to}`;
+    if (!linkIds.has(key)) {
       links.push({ from: link.from, to: link.to });
+      linkIds.add(key);
     }
   }
+  const groups = [];
+  const groupIds = new Set();
+  const grouped = new Set();
+  for (const group of Array.isArray(raw.groups) ? raw.groups.slice(0, NODE_LIMIT) : []) {
+    if (!group || typeof group.id !== 'string' || !idPattern.test(group.id) || groupIds.has(group.id) || !Array.isArray(group.nodes)) continue;
+    const members = [...new Set(group.nodes.filter(id => ids.has(id) && !grouped.has(id)))];
+    if (members.length < 2) continue;
+    groups.push({ id: group.id, title: cleanText(group.title, 80) || '节点分组', nodes: members });
+    groupIds.add(group.id);
+    members.forEach(id => grouped.add(id));
+  }
+  const strokes = (Array.isArray(raw.strokes) ? raw.strokes.slice(0, STROKE_LIMIT) : [])
+    .filter(Array.isArray).map(points => points.slice(0, STROKE_POINTS).filter(point =>
+      Array.isArray(point) && point.length === 2 && point.every(Number.isFinite))).filter(points => points.length > 1);
   for (const node of nodes) if (!ids.has(node.origin) || node.origin === node.id) node.origin = null;
   const seenRounds = new Set();
   const proposals = [];
@@ -119,6 +159,7 @@ export function normalizeProject(raw) {
     if (!options.length) continue;
     seenRounds.add(round.id);
     proposals.push({ id: round.id, focus: round.focus || null, beat: Object.hasOwn(BEATS, round.beat) ? round.beat : 'scene',
+      methodStage: normalizeStage(round.methodStage),
       scope: round.scope === 'next' ? 'next' : 'beat', label: cleanText(round.label, 120), modelSource: cleanText(round.modelSource, 120),
       modelId: typeof round.modelId === 'string' && idPattern.test(round.modelId) ? round.modelId : null, options });
   }
@@ -127,12 +168,16 @@ export function normalizeProject(raw) {
     id: typeof raw.id === 'string' && idPattern.test(raw.id) ? raw.id : newId(),
     title: cleanText(raw.title, 100) || '未命名故事',
     format: FORMATS.includes(raw.format) ? raw.format : '短片',
+    method: methodFor(raw.method).id,
     premise: cleanText(raw.premise, 5000),
     constraints: cleanText(raw.constraints, 5000),
     analysisNotes: cleanText(raw.analysisNotes, 4000),
     sourceName: cleanText(raw.sourceName, 255),
     cover: raw.cover === 'rain' ? 'rain' : null,
-    nodes, mainline, links, proposals,
+    referenceNodesMigrated: raw.referenceNodesMigrated === true,
+    referenceNodeIds: Object.fromEntries(['premise', 'constraints'].filter(key => typeof raw.referenceNodeIds?.[key] === 'string' &&
+      idPattern.test(raw.referenceNodeIds[key])).map(key => [key, raw.referenceNodeIds[key]])),
+    nodes, mainline, links, proposals, groups, strokes,
   };
 }
 
@@ -157,12 +202,10 @@ export function positionFor(project, beat, focus) {
 }
 
 export function pinNode(project, node) {
-  if (project.mainline.includes(node.id)) return false;
+  if (node.kind !== 'plot' || project.mainline.includes(node.id)) return false;
   const existing = node.beat === 'scene' ? null : beatNode(project, node.beat);
   if (existing) {
     project.mainline[project.mainline.indexOf(existing.id)] = node.id;
-    [existing.x, node.x] = [node.x, existing.x];
-    [existing.y, node.y] = [node.y, existing.y];
     return true;
   }
   const stage = STORY_ORDER.indexOf(node.beat);
@@ -175,32 +218,36 @@ export function pinNode(project, node) {
 }
 
 export function removeNode(project, id) {
-  project.nodes = project.nodes.filter(node => node.id !== id);
-  project.mainline = project.mainline.filter(nodeId => nodeId !== id);
-  project.links = project.links.filter(link => link.from !== id && link.to !== id);
-  project.proposals = (project.proposals || []).filter(round => round.focus !== id);
-  for (const node of project.nodes) if (node.origin === id) node.origin = null;
+  removeNodes(project, new Set([id]));
 }
 
-export function alternateNodes(project, beat, focus) {
-  if (beat !== 'scene') return project.nodes.filter(node => node.beat === beat && !project.mainline.includes(node.id));
-  if (!focus) return [];
-  return project.nodes.filter(node => node.id !== focus.id && !project.mainline.includes(node.id) &&
-    (node.origin === focus.id || (focus.origin && node.origin === focus.origin)));
+export function removeNodes(project, ids) {
+  project.nodes = project.nodes.filter(node => !ids.has(node.id));
+  project.mainline = project.mainline.filter(id => !ids.has(id));
+  project.links = project.links.filter(link => !ids.has(link.from) && !ids.has(link.to));
+  project.proposals = (project.proposals || []).filter(round => !ids.has(round.focus));
+  project.groups = (project.groups || []).map(group => ({ ...group, nodes: group.nodes.filter(id => !ids.has(id)) }))
+    .filter(group => group.nodes.length >= 2);
+  for (const node of project.nodes) if (ids.has(node.origin)) node.origin = null;
 }
 
-export function connections(project, mainlineOnly) {
-  const pairs = project.mainline.slice(1).map((to, index) => ({ from: project.mainline[index], to, kind: 'main' }));
-  if (mainlineOnly) return pairs;
-  for (const node of project.nodes) {
-    if (project.mainline.includes(node.id)) continue;
-    const source = (node.beat !== 'scene' ? beatNode(project, node.beat)?.id : null) || node.origin;
-    if (source && source !== node.id) pairs.push({ from: source, to: node.id, kind: 'option' });
+export function upstreamNodes(project, targets) {
+  const seen = new Set(targets);
+  const incoming = new Map();
+  for (const { from, to } of project.links) {
+    if (!incoming.has(to)) incoming.set(to, []);
+    incoming.get(to).push(from);
   }
-  for (const link of project.links) {
-    if (!pairs.some(pair => pair.from === link.from && pair.to === link.to)) pairs.push({ ...link, kind: 'cause' });
+  const queue = [...seen];
+  for (let index = 0; index < queue.length; index += 1) {
+    for (const source of incoming.get(queue[index]) || []) {
+      if (seen.has(source)) continue;
+      seen.add(source);
+      queue.push(source);
+    }
   }
-  return pairs;
+  for (const target of targets) seen.delete(target);
+  return project.nodes.filter(node => seen.has(node.id));
 }
 
 export function arrange(project) {

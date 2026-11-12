@@ -1,4 +1,4 @@
-import { BEATS, FORMATS, PROVIDERS } from './story.js';
+import { FORMATS, PROVIDERS } from './story.js';
 import { $, button, escape, icon, field } from './ui.js';
 
 function splitScript(text, size = 16000) {
@@ -52,7 +52,7 @@ export function createScriptImport({ modal, show, headers, api, profiles, defaul
       <div class="section-label"><h3>选中要应用的节点</h3><span class="hint">${state.checked.size} / ${result.nodes.length}</span></div>
       <div class="analysis-nodes">${result.nodes.map((node, index) => `<label class="analysis-node">
         <input type="checkbox" data-analysis-index="${index}" ${state.checked.has(index) ? 'checked' : ''} ${state.task ? 'disabled' : ''}>
-        <div><span class="node-pill tone-${BEATS[node.beat].color}">${BEATS[node.beat].name}</span><h4>${escape(node.title)}</h4>
+        <div><h4>${escape(node.title)}</h4>
         <p>${escape(node.action)}</p>${node.consequence ? `<p><strong>后果</strong> ${escape(node.consequence)}</p>` : ''}
         ${node.evidence ? `<blockquote>${escape(node.evidence)}</blockquote>` : '<p class="field-hint">原文依据待核对</p>'}</div></label>`).join('')}</div></section>`;
   }
@@ -153,5 +153,5 @@ export function createScriptImport({ modal, show, headers, api, profiles, defaul
       $('.analysis-result .section-label .hint', modal).textContent = `${state.checked.size} / ${state.result.nodes.length}`;
     }
   });
-  return { open, pick: () => fileInput.click(), analyze, cancel: () => state.task?.abort(), apply };
+  return { open, read, pick: () => fileInput.click(), analyze, cancel: () => state.task?.abort(), apply };
 }

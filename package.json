@@ -1,6 +1,6 @@
 {
   "name": "zhimu-story-canvas",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "枝幕 · 面向剧本开发的多模型故事画布",
   "type": "module",
@@ -13,15 +13,18 @@
   "scripts": {
     "start": "electron .",
     "preview": "node server.mjs",
+    "checkout": "node commerce/server.mjs",
     "package:win": "electron-builder --win portable --x64"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
     "@phosphor-icons/web": "^2.1.2",
     "docx": "^9.15.3",
+    "jose": "6.2.17",
     "mammoth": "1.13.0",
     "pdfjs-dist": "6.5.438",
-    "pdfkit": "^0.20.2"
+    "pdfkit": "^0.20.2",
+    "qrcode": "1.5.4"
   },
   "devDependencies": {
     "electron": "45.3.1",

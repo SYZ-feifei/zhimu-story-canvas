@@ -6,3 +6,6 @@ dist/
 !.env.example
 *.log
 .DS_Store
+model.env
+guide-catalogue.json
+*.sqlite*
