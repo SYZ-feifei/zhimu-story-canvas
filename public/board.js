@@ -64,7 +64,7 @@ export class StoryBoard {
     this.viewport.addEventListener('wheel', event => this.wheel(event), { passive: false });
     this.world.addEventListener('click', event => {
       const node = event.target.closest('[data-node]');
-      if (node && event.detail === 0) this.select(node.dataset.node);
+      if (node && event.detail === 0 && !event.target.closest('[data-action]')) this.select(node.dataset.node);
     });
     this.minimap.addEventListener('click', event => {
       if (!this.map) return;
@@ -78,7 +78,7 @@ export class StoryBoard {
     this.resize.observe(this.viewport);
   }
 
-  update(project, { selected, mainlineOnly, linking, linkStart, reset = false }) {
+  update(project, { selected, mainlineOnly, linking, linkStart, generating, recent = [], modelLabel, reset = false }) {
     this.nodes = mainlineOnly ? project.nodes.filter(node => project.mainline.includes(node.id)) : project.nodes;
     this.edges = connections(project, mainlineOnly);
     this.selected = selected;
@@ -89,11 +89,12 @@ export class StoryBoard {
       const option = index < 0;
       const beat = BEATS[node.beat];
       if (option) alternate += 1;
-      return `<button class="story-node tone-${beat.color}${option ? ' is-option' : ''}${node.id === selected ? ' is-selected' : ''}${node.id === linkStart ? ' is-link-start' : ''}" type="button" data-node="${node.id}" aria-pressed="${node.id === selected}" style="left:${node.x}px;top:${node.y}px">
-        <span class="story-node-head"><span class="node-pill">${node.beat === 'scene' ? icon('film-strip') : node.beat} ${beat.short}</span><span class="node-number">${option ? `备选 ${alternate}` : `${icon('lock-key')} ${String(index + 1).padStart(2, '0')}`}</span></span>
-        <strong title="${escape(node.title)}">${escape(node.title)}</strong><p>${escape(node.action || '添加剧情动作')}</p>
-        <span class="story-node-footer">${icon(option ? 'git-branch' : 'wave-sine')}${option ? '可比较方案' : node.tension === null ? '待标注' : `张力 ${node.tension}/10`}</span>
-      </button>`;
+      return `<article class="story-node tone-${beat.color}${option ? ' is-option' : ''}${node.id === selected ? ' is-selected' : ''}${node.id === linkStart ? ' is-link-start' : ''}${node.id === generating ? ' is-generating' : ''}${recent.includes(node.id) ? ' is-recent' : ''}" data-node="${node.id}" style="left:${node.x}px;top:${node.y}px">
+        <button type="button" class="node-face" aria-pressed="${node.id === selected}"><span class="story-node-head"><span class="node-pill">${node.beat === 'scene' ? icon('film-strip') : node.beat} ${beat.short}</span><span class="node-number">${option ? `备选 ${alternate}` : `${icon('lock-key')} ${String(index + 1).padStart(2, '0')}`}</span></span>
+        <strong title="${escape(node.title)}">${escape(node.title)}</strong><span class="node-summary">${escape(node.action || '添加剧情动作')}</span></button>
+        <div class="story-node-footer"><button type="button" class="node-model" data-action="node-model" data-id="${node.id}" title="为此节点选择模型">${icon('cpu')}<span>${escape(modelLabel(node))}</span>${icon('caret-down')}</button>
+        <button type="button" class="node-ai" data-action="node-ai" data-id="${node.id}" aria-label="从${escape(node.title)}发散" title="AI 发散">${icon(node.id === generating ? 'spinner-gap' : 'sparkle')}</button></div>
+      </article>`;
     }).join('');
     if (reset) this.fitted = false;
     if (this.fitted) this.draw();
@@ -102,7 +103,7 @@ export class StoryBoard {
 
   pointerDown(event) {
     if ((event.button !== 0 && event.button !== 1) || this.gesture) return;
-    if (event.target.closest('.canvas-top,.canvas-bottom,.canvas-empty')) return;
+    if (event.target.closest('.canvas-top,.canvas-bottom,.canvas-empty,[data-action]')) return;
     const target = event.target.closest('[data-node]');
     const node = event.button === 0 && target ? this.nodes.find(item => item.id === target.dataset.node) : null;
     event.preventDefault();

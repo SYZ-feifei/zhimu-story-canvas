@@ -6,24 +6,28 @@
   <meta name="theme-color" content="#f9f8fd">
   <meta name="description" content="枝幕是面向剧本开发的多模型故事画布。逐拍发散、比较分支、标注情绪曲线，并导出主线大纲。">
   <title>枝幕 · 剧本创作画布</title>
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="/assets/syz.png">
   <link rel="stylesheet" href="/vendor/icons/style.css">
   <link rel="stylesheet" href="/app.css">
 </head>
 <body>
+  <section id="login-screen" class="login-screen" aria-label="登录枝幕" hidden></section>
+  <div id="app-shell" hidden>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true"><i class="ph ph-tree-structure"></i></span>
+      <img class="brand-mark" src="/assets/syz.png" alt="SYZ">
       <strong>枝幕</strong><span class="brand-description">剧本创作画布</span>
     </div>
-    <div class="workspace-crumb"><i class="ph ph-folder" aria-hidden="true"></i><span id="crumb-title"></span></div>
+    <button class="workspace-crumb" type="button" data-action="home" title="返回项目首页"><i class="ph ph-house" aria-hidden="true"></i><span id="crumb-title"></span></button>
     <div class="top-actions">
       <span class="save-state" id="save-state" role="status"><i class="ph ph-check-circle" aria-hidden="true"></i>已保存至本机</span>
       <button class="button secondary" data-action="models" id="models-button"><i class="ph ph-cpu" aria-hidden="true"></i><span>模型</span></button>
-      <button class="button primary" data-action="export"><i class="ph ph-export" aria-hidden="true"></i><span>导出</span></button>
+      <button class="button primary" data-action="export" id="export-button"><i class="ph ph-export" aria-hidden="true"></i><span>导出</span></button>
+      <button class="button light account-button" data-action="account" title="本机账号"><i class="ph ph-user-circle" aria-hidden="true"></i><span id="account-name"></span></button>
     </div>
   </header>
-  <main class="workspace">
+  <main id="home-screen" class="home-screen" aria-label="项目首页"></main>
+  <main class="workspace" id="workspace-screen" hidden>
     <aside class="sidebar" id="sidebar" aria-label="项目和四拍推演"></aside>
     <section class="work-area" aria-label="故事工作区">
       <div class="work-header">
@@ -80,13 +84,10 @@
     </section>
     <aside class="inspector" id="inspector" aria-label="编剧台"></aside>
   </main>
-  <div class="mobile-bar" aria-label="移动端面板">
-    <button class="button light" data-action="mobile-project"><i class="ph ph-squares-four" aria-hidden="true"></i>项目与结构</button>
-    <button class="button light" data-action="mobile-inspector"><i class="ph ph-sparkle" aria-hidden="true"></i>编剧台</button>
   </div>
-  <button id="mobile-scrim" class="mobile-scrim" data-action="mobile-close" aria-label="关闭侧栏" hidden></button>
   <dialog id="modal" class="modal" aria-labelledby="modal-title"></dialog>
   <input type="file" id="import-file" accept=".json,application/json" hidden>
+  <input type="file" id="script-file" accept=".docx,.pdf,.md,.txt,.fountain" hidden>
   <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
   <script type="module" src="/app.js"></script>
 </body>

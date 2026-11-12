@@ -6,7 +6,7 @@ export function demoProject() {
     premise: '车站停运前十分钟，一把红伞让值班员林栀发现，一份本该留档的认领记录被人抹掉了。',
     constraints: '故事发生在末班车驶离前的失物招领处。主要人物是林栀、来客和站长。红伞贯穿全片。',
     mainline: ['opening', 'pressure', 'reveal', 'payoff'],
-    links: [],
+    links: [], proposals: [], analysisNotes: '', sourceName: '',
     nodes: [
       { id: 'opening', beat: 'A', title: '最后一张认领单', action: '铁帘落到一半，林栀伸手从碎纸口抽回一张湿透的认领单。',
         reason: '交班前她必须清点未领物品。认领单的存根撕口让她停下碎纸机。', consequence: '她按住铁帘开关，把最后一个来客留在窗口。',
@@ -17,6 +17,7 @@ export function demoProject() {
       { id: 'reveal', beat: 'C', title: '伞骨里是存根', action: '林栀撑开红伞。伞骨里滑出半联存根，撕口正好接上那张湿单。',
         reason: '来客在意编号却没看伞柄，林栀改查伞内部。', consequence: '存根上的站长签名使销档行为变得可追溯。',
         clue: '用两联单的撕口吻合，让观众自己认出消失的记录。', tradeoff: '开场要拍清认领单的撕口和两联制。',
+        fixedDetails: '红伞内侧藏着被撕掉的存根，存根上有站长签名。',
         valence: 2, tension: 9, emotionNote: '证据出现带来短暂掌控感，站长仍然在场。', x: 460, y: 0 },
       { id: 'payoff', beat: 'D', title: '把证据贴在窗外', action: '林栀把拼好的两联贴在玻璃外侧，把红伞挂回未认领区。来客举起手机。',
         reason: '只要证据留在铁帘内，站长就能拿回它。', consequence: '落帘后，外侧玻璃上的签名仍然可以被拍下来。',

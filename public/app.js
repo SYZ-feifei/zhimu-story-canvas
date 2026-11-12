@@ -1,13 +1,16 @@
 import { StoryBoard } from './board.js';
 import { demoProject } from './demo.js';
 import { EmotionChart } from './emotion.js';
+import { projectHome } from './home.js';
+import { enterWorkspace } from './login.js';
+import { createScriptImport } from './script-import.js';
 import { ANGLES, BEATS, DEVELOPMENT_ORDER, FORMATS, NODE_LIMIT, PROVIDERS, alternateNodes, arrange, beatName, beatNode,
   cleanText, mainlineNodes, makeNode, newId, newProject, normalizeProject, pinNode, positionFor, removeNode } from './story.js';
 import { $, button, enabled, escape, field, icon, iconButton, signed } from './ui.js';
 
-const PROJECT_KEY = 'zhimu.projects.v1';
-const MODEL_KEY = 'zhimu.models.v1';
-const mobile = matchMedia('(max-width: 940px)');
+const login = await enterWorkspace();
+const PROJECT_KEY = `zhimu.projects.${login.account.id}.v1`;
+const MODEL_KEY = `zhimu.models.${login.account.id}.v1`;
 const modal = $('#modal');
 const importFile = $('#import-file');
 const valueOf = (data, name) => String(data.get(name) ?? '').trim();
@@ -49,10 +52,11 @@ const keys = new Map();
 let environmentModel = null;
 let project = library.projects.find(item => item.id === library.active);
 const state = {
+  screen: 'home',
   selected: beatNode(project, 'C')?.id ?? project.nodes[0]?.id ?? null,
   beat: beatNode(project, 'C') ? 'C' : project.nodes[0]?.beat ?? 'C',
   panel: 'ai', view: 'board', mainlineOnly: false, linking: false, linkStart: null, angle: 'beat', scope: 'beat', request: '',
-  chartOpen: true, result: null, generation: null, assessment: null,
+  chartOpen: true, generation: null, assessment: null, recent: [],
 };
 const history = { undo: [], redo: [] };
 const board = new StoryBoard({ select: id => selectNode(id, 'detail'), move: moveNode });
@@ -119,10 +123,9 @@ function switchProject(id) {
   library.active = id;
   history.undo.length = history.redo.length = 0;
   const first = beatNode(project, 'C') || mainlineNodes(project)[0] || project.nodes[0];
-  Object.assign(state, { selected: first?.id ?? null, beat: first?.beat ?? 'C', panel: 'ai', view: 'board', linking: false,
-    linkStart: null, mainlineOnly: false, scope: 'beat', request: '', result: null, generation: null, assessment: null });
+  Object.assign(state, { screen: 'canvas', selected: first?.id ?? null, beat: first?.beat ?? 'C', panel: 'ai', view: 'board', linking: false,
+    linkStart: null, mainlineOnly: false, scope: 'beat', request: '', generation: null, assessment: null, recent: [] });
   closeModal();
-  setMobile('');
   persist();
   render(true);
 }
@@ -157,7 +160,6 @@ function selectNode(id, panel = 'detail', jump = false) {
   if (jump) state.view = 'board';
   render();
   board.reveal(id);
-  if (mobile.matches && panel === 'detail') setMobile('inspector');
 }
 
 function chooseBeat(beat) {
@@ -171,7 +173,6 @@ function chooseBeat(beat) {
   if (node && !project.mainline.includes(node.id)) state.mainlineOnly = false;
   render();
   if (node) board.reveal(node.id);
-  if (mobile.matches) setMobile('inspector');
 }
 
 function moveNode(id, x, y) {
@@ -181,16 +182,10 @@ function moveNode(id, x, y) {
   });
 }
 
-function setMobile(panel) {
-  document.body.dataset.mobilePanel = panel;
-  $('#mobile-scrim').hidden = !panel || !mobile.matches;
-}
-mobile.addEventListener('change', () => setMobile(''));
-
 function renderSidebar() {
   const settled = DEVELOPMENT_ORDER.filter(beat => beatNode(project, beat)).length;
   $('#sidebar').innerHTML = `
-    <div class="section-label"><h2>项目</h2><div>${iconButton('projects', '项目列表', 'folders')}${iconButton('new-project', '新建项目', 'plus')}${iconButton('mobile-close', '关闭项目面板', 'x', '', 'mobile-close')}</div></div>
+    <div class="section-label"><h2>项目</h2><div>${iconButton('projects', '项目列表', 'folders')}${iconButton('new-project', '新建项目', 'plus')}</div></div>
     <article class="project-card">
       ${project.cover === 'rain' ? '<div class="project-cover" role="img" aria-label="雨夜窗口与红伞"><span class="sample-label">示例</span></div>' : ''}
       <div class="project-info"><div class="project-title"><h1 title="${escape(project.title)}">${escape(project.title)}</h1>${iconButton('edit-project', '编辑项目资料', 'pencil-simple')}</div>
@@ -207,7 +202,8 @@ function renderSidebar() {
           <span class="beat-letter">${beat}</span><span class="beat-meta"><strong>${slot.name}</strong><small>${escape(locked?.title || '待确定')}</small></span>${icon(locked ? 'lock-key' : 'circle-dashed')}</button>`;
       }).join('')}</div>
     </section>
-    <section class="side-note"><div class="section-label"><h2>已定设定</h2>${iconButton('edit-project', '编辑已定设定', 'pencil-simple')}</div><p>${escape(project.constraints || '记录需要保留的人物、关系或世界规则。')}</p></section>`;
+    <section class="side-note"><div class="section-label"><h2>共享设定</h2>${iconButton('edit-project', '编辑共享设定', 'pencil-simple')}</div><p>${escape(project.constraints || '所有节点的模型都会读取这里的人物、关系和规则。')}</p></section>
+    ${project.sourceName ? `<section class="side-note"><div class="section-label"><h2>导入来源</h2>${iconButton('analysis-notes', '查看结构分析', 'file-text')}</div><p>${escape(project.sourceName)}</p></section>` : ''}`;
 }
 
 function renderOutline() {
@@ -223,12 +219,40 @@ function renderOutline() {
 
 const allProfiles = () => [...(environmentModel ? [environmentModel] : []), ...models.profiles];
 const activeProfile = () => allProfiles().find(profile => profile.id === models.active) || allProfiles()[0];
+const profileFor = (node = focused()) => node?.modelId ? allProfiles().find(profile => profile.id === node.modelId) : activeProfile();
+const profileName = profile => profile?.name || profile?.model || '选择模型';
+const roundsFor = () => project.proposals.filter(round => round.focus === state.selected && round.beat === aiBeat() && round.scope === state.scope);
+let returnToImport = false;
+const scriptImport = createScriptImport({ modal, show: openModal, headers: login.headers, api, profiles: allProfiles,
+  defaultProfile: activeProfile, useProfile: profile => {
+    const payload = modelPayload(profile);
+    if (!payload) returnToImport = true;
+    return payload;
+  }, onApply: applyScript, notice: toast });
+
+function applyScript(result) {
+  const next = newProject(result);
+  for (const [index, plot] of result.nodes.entries()) {
+    const node = makeNode({ ...plot, modelId: result.modelId, modelSource: result.modelSource,
+      origin: next.nodes.at(-1)?.id, x: index * 230, y: 0 });
+    next.nodes.push(node);
+    next.mainline.push(node.id);
+  }
+  library.projects.push(next);
+  switchProject(next.id);
+  state.recent = next.mainline;
+  render();
+  toast(`剧本已拆为 ${next.nodes.length} 个主线节点`);
+}
 
 function modelPicker() {
   const available = allProfiles();
-  const active = activeProfile()?.id;
-  return `<div class="model-row"><select class="model-select" id="model-select" aria-label="当前 AI 模型" ${enabled(available.length > 0)}>
-    ${available.length ? available.map(profile => `<option value="${profile.id}" ${profile.id === active ? 'selected' : ''}>${escape(profile.name || profile.model)} · ${PROVIDERS[profile.provider].label}</option>`).join('') : '<option>尚未接入模型</option>'}</select>${button('models', '模型设置', { glyph: 'sliders-horizontal', style: 'secondary compact' })}</div>`;
+  const node = focused();
+  const active = node ? node.modelId || '' : activeProfile()?.id;
+  return `<div class="field"><label for="model-select">${node ? '此节点的模型' : '默认模型'}</label><div class="model-row"><select class="model-select" id="model-select" aria-label="当前 AI 模型" ${enabled(available.length > 0)}>
+    ${node && available.length ? `<option value="">跟随默认 · ${escape(profileName(activeProfile()))}</option>` : ''}
+    ${node?.modelId && !profileFor(node) ? `<option value="${node.modelId}" selected>此配置待重新接入</option>` : ''}
+    ${available.length ? available.map(profile => `<option value="${profile.id}" ${profile.id === active ? 'selected' : ''}>${escape(profileName(profile))} · ${PROVIDERS[profile.provider].label}</option>`).join('') : '<option>尚未接入模型</option>'}</select>${button(node ? 'node-model' : 'models', '模型设置', { glyph: 'sliders-horizontal', style: 'secondary compact', data: node ? dataId(node.id) : '' })}</div></div>`;
 }
 
 function branchRows() {
@@ -240,11 +264,14 @@ function branchRows() {
 }
 
 function generatedRows() {
-  const result = state.result;
-  if (!result?.options.length) return '';
-  return `<div class="inspector-divider"></div><div class="section-label"><h3>AI 候选 <span class="hint">${escape(result.label)}</span></h3>${button('all-candidates', '全部放上画布', { style: 'light compact' })}</div>
-    <div class="branch-stack">${result.options.map((option, i) => `<article class="candidate"><h4>${escape(option.title)}</h4><p>${escape(option.action)}</p>${option.consequence ? `<p>后果　${escape(option.consequence)}</p>` : ''}
-      <div class="candidate-actions">${button('add-candidate', '放上画布', { glyph: 'plus', style: 'secondary compact', data: dataId(i) })}${button('discard-candidate', '略过', { style: 'light compact', data: dataId(i) })}</div></article>`).join('')}</div>`;
+  return roundsFor().slice().reverse().map(round => `<div class="inspector-divider"></div><div class="section-label"><h3>AI 候选</h3><span class="hint">${escape(round.modelSource || '模型')}</span></div>
+    <div class="branch-stack">${round.options.map((option, i) => {
+      const data = `data-round="${round.id}" ${dataId(i)}`;
+      return `<article class="candidate"><h4>${escape(option.title)}</h4><p>${escape(option.action)}</p>${option.consequence ? `<p>后果　${escape(option.consequence)}</p>` : ''}
+        ${option.fixedDetails ? `<p>沿用细节　${escape(option.fixedDetails)}</p>` : ''}<div class="candidate-actions">
+        ${button('add-candidate', '应用为分支', { glyph: 'plus', style: 'secondary compact', data })}
+        ${button('pin-candidate', '应用到主线', { style: 'primary compact', data })}${iconButton('discard-candidate', '略过候选', 'x', data)}</div></article>`;
+    }).join('')}</div>`).join('');
 }
 
 function renderAi() {
@@ -256,11 +283,13 @@ function renderAi() {
     ${focused() && state.beat !== 'scene' ? `<div class="field"><span class="field-label">发散目标</span><div class="angles">${[['beat', '同拍备选'], ['next', '后续情节']].map(([id, label]) => button('scope', label, { style: 'secondary angle', data: dataId(id), extra: `aria-pressed="${state.scope === id}"` })).join('')}</div></div>` : ''}
     <div class="field"><span class="field-label">发散角度</span><div class="angles">${Object.entries(ANGLES).map(([key, label]) => button('angle', label, { style: 'secondary angle', data: dataId(key), extra: `aria-pressed="${state.angle === key}"` })).join('')}</div></div>
     <div class="field"><label for="ai-request">本轮要求 <small>选填</small></label><textarea id="ai-request" rows="2" maxlength="1600" placeholder="例如保留红伞，把揭晓动作交给来客。">${escape(state.request)}</textarea></div>
-    ${modelPicker()}<div class="run-action">${button('generate', busy ? '正在生成分支…' : '生成 3 个分支', { glyph: 'sparkle', style: 'primary wide', disabled: busy })}${busy ? iconButton('cancel-generation', '取消生成', 'x') : ''}</div>
+    ${modelPicker()}<div class="run-action">${button('generate', busy ? '正在读取上下文并发散…' : '生成 3 个分支', { glyph: busy ? 'spinner-gap' : 'sparkle', style: 'primary wide', disabled: busy })}${busy ? iconButton('cancel-generation', '取消生成', 'x') : ''}</div>
+    ${busy ? `<div class="activity-status" role="status"><span class="activity-dots"></span>${escape(state.generation.modelSource)} · ${escape(state.generation.label)}</div>` : ''}
     ${generatedRows()}<div class="inspector-divider"></div>${branchRows()}`;
 }
 
-const detailFields = [['action', '情节动作'], ['reason', '前因'], ['consequence', '后果'], ['clue', '伏笔与回收'], ['tradeoff', '联动修改'], ['script', '场景正文']];
+const detailFields = [['action', '情节动作'], ['reason', '前因'], ['consequence', '后果'], ['clue', '伏笔与回收'], ['tradeoff', '联动修改'],
+  ['fixedDetails', '沿用细节'], ['evidence', '原文依据'], ['script', '场景正文']];
 
 function renderDetail() {
   const node = focused();
@@ -269,10 +298,12 @@ function renderDetail() {
   const settled = project.mainline.includes(node.id);
   const links = project.links.filter(link => link.from === node.id || link.to === node.id);
   return `<div class="focus-card tone-${beat.color}"><span class="node-pill">${beat.name} · ${settled ? '已纳入主线' : '备选'}</span><h3>${escape(node.title)}</h3></div>
+    ${node.modelSource ? `<p class="node-provenance">${icon('sparkle')}由 ${escape(node.modelSource)} 生成</p>` : ''}
     <div class="detail-actions">${button('edit-node', '编辑', { glyph: 'pencil-simple', style: 'secondary compact' })}
     ${settled ? button('unpin', '移出主线', { glyph: 'lock-key-open', style: 'light compact' }) : button('pin', node.beat === 'scene' ? '纳入主线' : '锁定本拍', { glyph: 'lock-key', style: 'primary compact', data: dataId(node.id) })}
     ${button('next-scene', '续写情节', { glyph: 'arrow-bend-down-right', style: 'light compact' })}</div>
     ${detailFields.filter(([key]) => node[key]).map(([key, label]) => `<div class="detail-block"><h4>${label}</h4><p>${escape(node[key])}</p></div>`).join('')}
+    ${node.fixedDetails ? button('keep-detail', '存入项目共享设定', { glyph: 'bookmark-simple', style: 'light compact' }) : ''}
     <div class="inspector-divider"></div><div class="section-label"><h3>情绪标注</h3>${button('edit-score', '编辑分值', { style: 'light compact' })}</div>
     <div class="score-chips"><span class="score-chip">情绪 ${signed(node.valence)}</span><span class="score-chip tension">张力 ${node.tension === null ? '待标注' : `${node.tension}/10`}</span></div>
     ${node.emotionNote ? `<p class="empty-note">${escape(node.emotionNote)}</p>` : ''}
@@ -283,7 +314,7 @@ function renderDetail() {
 function renderInspector() {
   const inspector = $('#inspector');
   const scroll = inspector.scrollTop;
-  inspector.innerHTML = `<div class="inspector-head"><h2>${icon('sparkle')}编剧台</h2>${iconButton('mobile-close', '关闭编剧台', 'x', '', 'mobile-close')}</div>
+  inspector.innerHTML = `<div class="inspector-head"><h2>${icon('sparkle')}编剧台</h2></div>
     <div class="inspector-tabs" aria-label="编剧台视图"><button type="button" data-action="panel-ai" aria-pressed="${state.panel === 'ai'}">AI 发散</button><button type="button" data-action="panel-detail" aria-pressed="${state.panel === 'detail'}">节点详情</button></div>
     ${state.panel === 'ai' ? renderAi() : renderDetail()}`;
   inspector.scrollTop = scroll;
@@ -292,7 +323,13 @@ function renderInspector() {
 function render(reset = false) {
   if (state.selected && !focused()) state.selected = null;
   if (state.linkStart && !nodeById(state.linkStart)) state.linkStart = null;
-  $('#crumb-title').textContent = project.title;
+  const onCanvas = state.screen === 'canvas';
+  $('#home-screen').hidden = onCanvas;
+  $('#workspace-screen').hidden = !onCanvas;
+  $('#export-button').hidden = !onCanvas;
+  $('#save-state').hidden = !onCanvas;
+  $('#crumb-title').textContent = onCanvas ? project.title : '项目首页';
+  if (!onCanvas) $('#home-screen').innerHTML = projectHome(library.projects);
   $('#models-button').title = activeProfile()?.name || '接入 AI 模型';
   $('#board-tab').setAttribute('aria-pressed', state.view === 'board');
   $('#outline-tab').setAttribute('aria-pressed', state.view === 'outline');
@@ -319,7 +356,10 @@ function render(reset = false) {
   renderSidebar();
   renderOutline();
   renderInspector();
-  board.update(project, { selected: state.selected, mainlineOnly: state.mainlineOnly, linking: state.linking, linkStart: state.linkStart, reset });
+  const recent = state.recent;
+  state.recent = [];
+  board.update(project, { selected: state.selected, mainlineOnly: state.mainlineOnly, linking: state.linking, linkStart: state.linkStart,
+    generating: state.generation?.focus, recent, modelLabel: node => profileName(profileFor(node)), reset });
   chart.update(project, state.selected);
 }
 
@@ -337,7 +377,7 @@ function formFooter(label = '保存', start = '') {
 
 function projectsDialog() {
   const list = library.projects.map(item => `<button class="list-row${item.id === project.id ? ' is-active' : ''}" data-action="select-project" ${dataId(item.id)}>${icon('folder')}<span class="list-label"><strong>${escape(item.title)}</strong><small>${item.format} · ${item.nodes.length} 个节点</small></span>${icon(item.id === project.id ? 'check' : 'caret-right')}</button>`).join('');
-  openModal('项目', `<div class="project-list">${list}</div><div class="modal-footer">${button('import', '导入项目', { glyph: 'upload-simple' })}${button('new-project', '新建项目', { glyph: 'plus', style: 'primary' })}</div>`);
+  openModal('项目', `<div class="project-list">${list}</div><div class="modal-footer">${button('import', '导入备份', { glyph: 'archive' })}${button('script-import', '导入剧本', { glyph: 'upload-simple' })}${button('new-project', '新建项目', { glyph: 'plus', style: 'primary' })}</div>`);
 }
 
 function projectDialog(editing) {
@@ -346,7 +386,7 @@ function projectDialog(editing) {
     ${field('title', '项目名称', item.title, { required: true, placeholder: '给故事起个名字' })}
     ${field('format', '作品体量', item.format || '短片', { type: 'select', choices: FORMATS.map(format => [format, format]) })}
     ${field('premise', '故事梗概', item.premise, { type: 'textarea', max: 5000, rows: 3, placeholder: '谁在什么处境里，要做出什么选择？' })}
-    ${field('constraints', '已定设定', item.constraints, { type: 'textarea', max: 5000, rows: 3, placeholder: '人物、关系、时空或已经确认的剧情事实' })}
+    ${field('constraints', '共享设定', item.constraints, { type: 'textarea', max: 5000, rows: 3, placeholder: '后续模型都要沿用的人物、关系、时空或剧情事实' })}
     ${formFooter(editing ? '保存' : '创建项目', editing ? button('delete-project', '删除项目', { style: 'danger' }) : '')}</form>`);
 }
 
@@ -365,8 +405,10 @@ function nodeDialog(node, nextScene = false) {
     ${field('action', '情节动作', node?.action, { type: 'textarea', max: 2400, placeholder: '人物做了什么？' })}
     ${field('reason', '前因', node?.reason, { type: 'textarea', max: 1400, placeholder: '为什么偏偏在这时做？' })}
     ${field('consequence', '后果', node?.consequence, { type: 'textarea', max: 1400, placeholder: '谁的处境发生了变化？' })}
-    <details ${node?.clue || node?.tradeoff || node?.script ? 'open' : ''} class="editor-details"><summary>伏笔、联动与场景正文</summary>
+    <details ${node?.clue || node?.tradeoff || node?.fixedDetails || node?.script ? 'open' : ''} class="editor-details"><summary>伏笔、沿用细节与场景正文</summary>
     ${field('clue', '伏笔与回收', node?.clue, { type: 'textarea', max: 1200 })}${field('tradeoff', '联动修改', node?.tradeoff, { type: 'textarea', max: 1200 })}
+    ${field('fixedDetails', '沿用细节', node?.fixedDetails, { type: 'textarea', max: 1600 })}
+    ${node?.evidence ? field('evidence', '原文依据', node.evidence, { type: 'textarea', max: 500 }) : ''}
     ${field('script', '场景正文', node?.script, { type: 'textarea', max: 30000, rows: 5 })}</details>
     <details class="editor-details"><summary>情绪与张力</summary>${scoreFields(node)}</details>
     ${node ? '' : '<label class="check-label"><input type="checkbox" name="pin">创建后纳入主线</label>'}
@@ -394,25 +436,29 @@ function compareDialog() {
   }).join('')}</div>`, true);
 }
 
-function modelsDialog() {
-  const active = activeProfile()?.id;
+function modelsDialog(target = null) {
+  const node = nodeById(target);
+  const nodeData = node ? `data-target="${node.id}"` : '';
+  const active = node ? node.modelId : activeProfile()?.id;
   const list = allProfiles().map(profile => `<div class="list-row${profile.id === active ? ' is-active' : ''}">${icon('cpu')}
     <span class="list-label"><strong>${escape(profile.name || profile.model)}</strong><small>${PROVIDERS[profile.provider].label} · ${escape(profile.model)}</small></span>
-    ${profile.id !== 'env' ? iconButton('edit-model', '编辑模型', 'pencil-simple', dataId(profile.id)) : ''}
-    ${profile.id !== active ? button('select-model', '使用', { style: 'light compact', data: dataId(profile.id) }) : '<span class="project-format">当前</span>'}</div>`).join('');
-  openModal('模型设置', `<p>添加多个模型配置，生成分支和标注情绪时使用编剧台中的当前模型。</p>
-    <div class="profile-list">${list || '<p class="empty-note">目前还没有模型配置。</p>'}</div><div class="modal-footer">${button('new-model', '添加模型', { glyph: 'plus', style: 'primary' })}</div>`);
+    ${profile.id !== 'env' ? iconButton('edit-model', '编辑模型', 'pencil-simple', `${dataId(profile.id)} ${nodeData}`) : ''}
+    ${profile.id !== active ? button(node ? 'bind-model' : 'select-model', '使用', { style: 'light compact', data: `${dataId(profile.id)} ${nodeData}` }) : '<span class="project-format">当前</span>'}</div>`).join('');
+  openModal(node ? '为节点选择模型' : '模型设置', `<p>${node ? escape(node.title) : '保存多个模型配置。节点可独立选择配置，并读取同一个项目的剧情与共享设定。'}</p>
+    <div class="profile-list">${list || '<p class="empty-note">目前还没有模型配置。</p>'}</div><div class="modal-footer">
+    ${node?.modelId ? button('bind-model', '跟随默认', { data: `${dataId('')} ${nodeData}` }) : ''}
+    ${button('new-model', '添加模型', { glyph: 'plus', style: 'primary', data: nodeData })}</div>`);
 }
 
-function modelDialog(profile = null) {
+function modelDialog(profile = null, target = null) {
   const provider = profile?.provider || 'openai';
-  openModal(profile ? '编辑模型配置' : '添加模型配置', `<form data-form="model" ${profile ? dataId(profile.id) : ''}>
+  openModal(profile ? '编辑模型配置' : '添加模型配置', `<form data-form="model" ${profile ? dataId(profile.id) : ''} data-target="${escape(target)}">
     <div class="modal-grid">${field('name', '配置名称', profile?.name, { max: 80, placeholder: '例如常用模型' })}
     ${field('provider', '接口类型', provider, { type: 'select', choices: Object.entries(PROVIDERS).map(([key, value]) => [key, value.label]) })}</div>
     ${field('base', 'API Base URL', profile?.base || PROVIDERS[provider].base, { max: 500, required: true })}
     ${field('model', '模型 ID', profile?.model, { max: 180, required: true, placeholder: '服务商或 Ollama 中显示的模型 ID' })}
     ${field('apiKey', 'API Key', '', { type: 'password', max: 2000, placeholder: profile && keys.has(profile.id) ? '留空沿用本页密钥' : '本机 Ollama 可留空' })}
-    <p class="field-hint">密钥在本页会话有效。发散和标注会把相关剧情发送到所选模型服务。</p>
+    <p class="field-hint">密钥在本次打开期间有效。模型任务会将当前项目的共享剧情发送到所选服务。</p>
     <div class="detail-actions">${button('test-model', '测试连接', { glyph: 'plug', style: 'secondary compact' })}</div>
     ${formFooter('保存并使用', profile ? button('remove-model', '删除配置', { style: 'danger', data: dataId(profile.id) }) : '')}</form>`);
 }
@@ -424,7 +470,7 @@ function exportDialog() {
 }
 
 async function api(path, payload, signal) {
-  const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
+  const response = await fetch(path, { method: 'POST', headers: { ...login.headers, 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal });
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
     throw new Error(result.error || `本机服务返回 HTTP ${response.status}。`);
@@ -457,14 +503,14 @@ async function download(format, control) {
   finally { control.disabled = false; }
 }
 
-function modelPayload(profile) {
-  if (!profile) { modelsDialog(); return null; }
+function modelPayload(profile, target = null) {
+  if (!profile) { modelsDialog(target); return null; }
   if (profile.id === 'env') return { id: 'env' };
   let local = false;
   try { local = ['localhost', '127.0.0.1', '[::1]'].includes(new URL(profile.base).hostname); } catch { /* Server validates the address. */ }
   const apiKey = keys.get(profile.id) || '';
   if (!apiKey && !local) {
-    modelDialog(profile);
+    modelDialog(profile, target);
     showFormError($('form', modal), '请填写该配置的 API Key。');
     return null;
   }
@@ -477,51 +523,60 @@ async function generate() {
     toast('先填写故事梗概、情节动作或本轮要求。');
     return;
   }
-  const profile = modelPayload(activeProfile());
+  const selectedModel = profileFor();
+  const profile = modelPayload(selectedModel, state.selected);
   if (!profile) return;
   const controller = new AbortController();
-  const job = { controller, id: project.id, focus: state.selected, beat: aiBeat(), scope: state.scope, label: focusName() };
+  const job = { controller, projectId: project.id, focus: state.selected, beat: aiBeat(), scope: state.scope,
+    label: focusName(), modelId: selectedModel.id, modelSource: profileName(selectedModel) };
   const payload = { profile, project, beat: job.beat, focusId: job.focus, angle: state.angle, request: state.request };
   state.generation = job;
-  renderInspector();
+  render();
   try {
     const { options } = await (await api('/api/ai/suggest', payload, controller.signal)).json();
-    if (state.generation !== job || projectId() !== job.id) return;
-    state.result = { ...job, options };
-    state.panel = 'ai';
-    toast('已生成 3 个候选。选中的候选可放上画布。');
+    if (state.generation !== job || projectId() !== job.projectId) return;
+    if (job.focus && !nodeById(job.focus)) { toast('焦点节点已删除。'); return; }
+    const { controller: _controller, projectId: _projectId, ...context } = job;
+    commit(next => next.proposals.push({ id: newId(), ...context, options }));
+    toast(`「${job.label}」已生成 3 个候选，可选择应用。`);
   } catch (error) {
     if (!controller.signal.aborted && state.generation === job) toast(error.message || '生成失败。');
   } finally {
-    if (state.generation === job) { state.generation = null; renderInspector(); }
+    if (state.generation === job) { state.generation = null; render(); }
   }
 }
 
-function placeCandidates(indexes) {
-  const result = state.result;
-  if (!result || result.id !== project.id) return;
-  const selected = indexes.map(index => result.options[index]).filter(Boolean);
-  if (!selected.length) return;
-  if (project.nodes.length + selected.length > NODE_LIMIT) { toast('项目已达到节点上限。'); return; }
+function discardCandidate(roundId, index, project) {
+  const round = project.proposals.find(item => item.id === roundId);
+  if (!round) return;
+  round.options.splice(index, 1);
+  if (!round.options.length) project.proposals = project.proposals.filter(item => item.id !== roundId);
+}
+
+function placeCandidate(roundId, index, pin) {
+  const result = project.proposals.find(round => round.id === roundId);
+  const option = result?.options[index];
+  if (!option) return;
+  if (project.nodes.length >= NODE_LIMIT) { toast('项目已达到节点上限。'); return; }
   const origin = nodeById(result.focus);
-  if (result.beat === 'scene' && result.focus && !origin) { toast('原始剧情已删除，请从新的节点发散。'); return; }
-  const added = [];
+  const node = makeNode({ ...option, beat: result.beat, origin: origin?.id, modelId: result.modelId,
+    modelSource: result.modelSource, ...positionFor(project, result.beat, origin) });
   state.mainlineOnly = false;
   state.view = 'board';
+  state.recent = [node.id];
+  if (pin || !origin) {
+    state.beat = node.beat;
+    state.selected = node.id;
+    state.scope = 'beat';
+    state.panel = 'detail';
+  }
   commit(next => {
-    for (const option of selected) {
-      const node = makeNode({ ...option, beat: result.beat, origin: origin?.id, ...positionFor(next, result.beat, origin) });
-      next.nodes.push(node);
-      added.push(node);
-    }
+    next.nodes.push(node);
+    if (pin) pinNode(next, node);
+    discardCandidate(roundId, index, next);
   });
-  result.options = result.options.filter((_, index) => !indexes.includes(index));
-  state.selected = result.focus && nodeById(result.focus) ? result.focus : added[0].id;
-  state.beat = nodeById(state.selected)?.beat || result.beat;
-  state.scope = result.scope;
-  render();
-  board.reveal(added[0].id);
-  toast(`已放上画布 ${added.length} 个备选节点`);
+  board.reveal(node.id);
+  toast(pin ? '已应用到主线。后续模型会读取此节点。' : '已应用为备选分支。');
 }
 
 const storySignature = item => JSON.stringify([item.premise, item.constraints, item.format, mainlineNodes(item).map(({ x, y, ...node }) => node)]);
@@ -529,7 +584,7 @@ const storySignature = item => JSON.stringify([item.premise, item.constraints, i
 async function assess() {
   if (state.assessment) { state.assessment.controller.abort(); toast('已取消情绪标注'); return; }
   if (!project.mainline.length) return;
-  const profile = modelPayload(activeProfile());
+  const profile = modelPayload(profileFor(), state.selected);
   if (!profile) return;
   const controller = new AbortController();
   const job = { controller, id: project.id, signature: storySignature(project) };
@@ -561,6 +616,7 @@ function makeMainline(id) {
   closeModal();
   state.beat = node.beat;
   state.selected = id;
+  state.scope = 'beat';
   state.panel = 'detail';
   commit(next => pinNode(next, next.nodes.find(item => item.id === id)));
   board.reveal(id);
@@ -642,7 +698,9 @@ modal.addEventListener('submit', event => {
       else keys.delete(profile.id);
       persistModels();
       closeModal();
-      render();
+      if (nodeById(form.dataset.target)) bindModel(form.dataset.target, profile.id);
+      else render();
+      if (returnToImport) { returnToImport = false; scriptImport.open(); }
       toast(`已选择模型 ${profile.name}`);
     } catch (error) { showFormError(form, error.message); }
     return;
@@ -654,7 +712,6 @@ modal.addEventListener('submit', event => {
       const next = newProject(input);
       library.projects.push(next);
       switchProject(next.id);
-      if (mobile.matches) setMobile('project');
     } else { closeModal(); commit(next => Object.assign(next, input)); }
     return;
   }
@@ -672,12 +729,13 @@ modal.addEventListener('submit', event => {
   const beat = valueOf(data, 'beat');
   const origin = nodeById(valueOf(data, 'origin'));
   const position = old ? { x: old.x, y: old.y } : positionFor(project, beat, origin);
-  const node = makeNode({ id: old?.id, beat, title, origin: old ? old.origin : origin?.id, ...position,
+  const node = makeNode({ id: old?.id, modelId: old?.modelId, modelSource: old?.modelSource, beat, title, origin: old ? old.origin : origin?.id, ...position,
     ...Object.fromEntries(detailFields.map(([key]) => [key, valueOf(data, key)])), ...valuesForScore(data) });
   state.selected = node.id;
   state.beat = node.beat;
   state.scope = 'beat';
   state.panel = 'detail';
+  if (!old) state.recent = [node.id];
   if (!old) { state.view = 'board'; state.mainlineOnly = false; }
   closeModal();
   commit(next => {
@@ -686,16 +744,40 @@ modal.addEventListener('submit', event => {
     if (data.has('pin')) pinNode(next, node);
   });
   board.reveal(node.id);
-  if (mobile.matches) setMobile('inspector');
 });
 
 document.addEventListener('input', event => {
   if (event.target.id === 'ai-request') state.request = event.target.value;
 });
 document.addEventListener('change', event => {
-  if (event.target.id === 'model-select') { models.active = event.target.value; persistModels(); renderInspector(); }
+  if (event.target.id === 'model-select') {
+    if (focused()) bindModel(state.selected, event.target.value);
+    else { models.active = event.target.value; persistModels(); render(); }
+  }
   if (event.target.id === 'field-provider' && event.target.closest('form[data-form="model"]')) $('#field-base', modal).value = PROVIDERS[event.target.value].base;
 });
+
+function bindModel(id, profileId) {
+  const node = nodeById(id);
+  if (!node || (profileId && !allProfiles().some(profile => profile.id === profileId))) return;
+  closeModal();
+  if (state.selected !== id) state.scope = 'beat';
+  state.selected = id;
+  state.beat = node.beat;
+  state.panel = 'ai';
+  if ((node.modelId || '') === profileId) { render(); return; }
+  commit(next => { next.nodes.find(item => item.id === id).modelId = profileId || null; });
+  toast(profileId ? `节点已选择 ${profileName(profileFor())}` : '节点已跟随默认模型');
+}
+
+function keepDetail() {
+  const detail = focused()?.fixedDetails;
+  if (!detail || project.constraints.includes(detail)) { toast('这条细节已在共享设定中。'); return; }
+  const nextText = [project.constraints, detail].filter(Boolean).join('\n');
+  if (nextText.length > 5000) { toast('共享设定已达字数上限，请先整理项目设定。'); return; }
+  commit(next => { next.constraints = nextText; });
+  toast('已保存到项目共享设定');
+}
 
 importFile.addEventListener('change', async () => {
   const [file] = importFile.files;
@@ -717,6 +799,10 @@ document.addEventListener('click', event => {
   const { action, id } = control.dataset;
   switch (action) {
     case 'close-modal': closeModal(); break;
+    case 'home': state.screen = 'home'; state.linking = false; state.linkStart = null; closeModal(); render(); break;
+    case 'account': openModal('本机账号', `<p>${escape(login.account.name)}</p><div class="modal-footer">${button('logout', '退出登录', { glyph: 'sign-out', style: 'secondary' })}</div>`); break;
+    case 'analysis-notes': openModal('剧本结构分析', `<p>${escape(project.sourceName)}</p><div class="detail-block"><p>${escape(project.analysisNotes || '结构已整理为主线节点。')}</p></div>`); break;
+    case 'logout': void login.logout(); break;
     case 'projects': projectsDialog(); break;
     case 'new-project': projectDialog(false); break;
     case 'edit-project': projectDialog(true); break;
@@ -730,6 +816,11 @@ document.addEventListener('click', event => {
       break;
     }
     case 'import': importFile.click(); break;
+    case 'script-import': returnToImport = false; scriptImport.open(); break;
+    case 'script-pick': scriptImport.pick(); break;
+    case 'script-analyze': void scriptImport.analyze(); break;
+    case 'script-cancel': scriptImport.cancel(); break;
+    case 'script-apply': scriptImport.apply(); break;
     case 'choose-beat': chooseBeat(id); break;
     case 'add-node': nodeDialog(null); break;
     case 'next-scene': nodeDialog(null, true); break;
@@ -762,12 +853,13 @@ document.addEventListener('click', event => {
     case 'zoom-out': board.zoomTo(board.view.zoom / 1.16); break;
     case 'zoom-reset': board.zoomTo(1); break;
     case 'toggle-chart': state.chartOpen = !state.chartOpen; render(); break;
-    case 'mobile-project': setMobile(document.body.dataset.mobilePanel === 'project' ? '' : 'project'); break;
-    case 'mobile-inspector': setMobile(document.body.dataset.mobilePanel === 'inspector' ? '' : 'inspector'); break;
-    case 'mobile-close': setMobile(''); break;
     case 'models': modelsDialog(); break;
-    case 'new-model': modelDialog(); break;
-    case 'edit-model': modelDialog(models.profiles.find(item => item.id === id)); break;
+    case 'node-model': modelsDialog(id); break;
+    case 'node-ai': selectNode(id, 'ai', true); break;
+    case 'bind-model': bindModel(control.dataset.target, id); break;
+    case 'keep-detail': keepDetail(); break;
+    case 'new-model': modelDialog(null, control.dataset.target); break;
+    case 'edit-model': modelDialog(models.profiles.find(item => item.id === id), control.dataset.target); break;
     case 'select-model': models.active = id; persistModels(); renderInspector(); modelsDialog(); break;
     case 'remove-model':
       models.profiles = models.profiles.filter(item => item.id !== id); keys.delete(id);
@@ -776,9 +868,8 @@ document.addEventListener('click', event => {
     case 'test-model': void checkModel(control); break;
     case 'generate': void generate(); break;
     case 'cancel-generation': state.generation?.controller.abort(); toast('已取消生成'); break;
-    case 'add-candidate': placeCandidates([Number(id)]); break;
-    case 'all-candidates': placeCandidates(state.result?.options.map((_, index) => index) || []); break;
-    case 'discard-candidate': if (state.result) { state.result.options.splice(Number(id), 1); renderInspector(); } break;
+    case 'add-candidate': case 'pin-candidate': placeCandidate(control.dataset.round, Number(id), action === 'pin-candidate'); break;
+    case 'discard-candidate': commit(next => discardCandidate(control.dataset.round, Number(id), next)); break;
     case 'assess': void assess(); break;
     case 'export': exportDialog(); break;
     case 'download': void download(id, control); break;
@@ -793,7 +884,6 @@ document.addEventListener('keydown', event => {
     navigateHistory(key === 'y' || event.shiftKey ? 'redo' : 'undo');
   }
   if (key === 'escape' && state.linking) { state.linking = false; state.linkStart = null; render(); }
-  else if (key === 'escape') setMobile('');
 });
 
 render(true);
@@ -802,7 +892,7 @@ if (hadInvalidStorage) {
   $('#save-state').classList.add('error');
   toast('本机旧项目无法读取，当前显示示例。');
 } else persist();
-fetch('/api/config').then(response => response.ok ? response.json() : {}).then(({ profile }) => {
+fetch('/api/config', { headers: login.headers }).then(response => response.ok ? response.json() : {}).then(({ profile }) => {
   environmentModel = profile || null;
-  renderInspector();
+  render();
 }).catch(() => {});

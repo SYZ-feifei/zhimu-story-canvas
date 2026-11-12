@@ -32,20 +32,30 @@ export function score(value, min, max) {
   return Number.isInteger(value) && value >= min && value <= max ? value : null;
 }
 
-export function makeNode(raw = {}) {
+export function plotContent(raw = {}) {
   return {
-    id: idPattern.test(raw.id ?? '') ? raw.id : newId(),
-    beat: Object.hasOwn(BEATS, raw.beat) ? raw.beat : 'scene',
     title: cleanText(raw.title, 100) || '未命名情节',
     action: cleanText(raw.action, 2400),
     reason: cleanText(raw.reason, 1400),
     consequence: cleanText(raw.consequence, 1400),
     clue: cleanText(raw.clue, 1200),
     tradeoff: cleanText(raw.tradeoff, 1200),
+    fixedDetails: cleanText(raw.fixedDetails, 1600),
     script: cleanText(raw.script, 30000),
+    evidence: cleanText(raw.evidence, 500),
     valence: score(raw.valence, -5, 5),
     tension: score(raw.tension, 0, 10),
     emotionNote: cleanText(raw.emotionNote, 800),
+  };
+}
+
+export function makeNode(raw = {}) {
+  return {
+    id: idPattern.test(raw.id ?? '') ? raw.id : newId(),
+    beat: Object.hasOwn(BEATS, raw.beat) ? raw.beat : 'scene',
+    ...plotContent(raw),
+    modelId: idPattern.test(raw.modelId ?? '') ? raw.modelId : null,
+    modelSource: cleanText(raw.modelSource, 120),
     origin: idPattern.test(raw.origin ?? '') ? raw.origin : null,
     x: Number.isFinite(raw.x) ? raw.x : 0,
     y: Number.isFinite(raw.y) ? raw.y : 0,
@@ -60,10 +70,13 @@ export function newProject(raw = {}) {
     format: FORMATS.includes(raw.format) ? raw.format : '短片',
     premise: cleanText(raw.premise, 5000),
     constraints: cleanText(raw.constraints, 5000),
+    analysisNotes: cleanText(raw.analysisNotes, 4000),
+    sourceName: cleanText(raw.sourceName, 255),
     cover: null,
     nodes: [],
     mainline: [],
     links: [],
+    proposals: [],
   };
 }
 
@@ -97,6 +110,18 @@ export function normalizeProject(raw) {
     }
   }
   for (const node of nodes) if (!ids.has(node.origin) || node.origin === node.id) node.origin = null;
+  const seenRounds = new Set();
+  const proposals = [];
+  for (const round of Array.isArray(raw.proposals) ? raw.proposals : []) {
+    if (!round || typeof round.id !== 'string' || !idPattern.test(round.id) || seenRounds.has(round.id) ||
+        (round.focus && !ids.has(round.focus)) || !Array.isArray(round.options)) continue;
+    const options = round.options.filter(option => option && typeof option === 'object').slice(0, 3).map(plotContent);
+    if (!options.length) continue;
+    seenRounds.add(round.id);
+    proposals.push({ id: round.id, focus: round.focus || null, beat: Object.hasOwn(BEATS, round.beat) ? round.beat : 'scene',
+      scope: round.scope === 'next' ? 'next' : 'beat', label: cleanText(round.label, 120), modelSource: cleanText(round.modelSource, 120),
+      modelId: typeof round.modelId === 'string' && idPattern.test(round.modelId) ? round.modelId : null, options });
+  }
   return {
     schema: 1,
     id: typeof raw.id === 'string' && idPattern.test(raw.id) ? raw.id : newId(),
@@ -104,8 +129,10 @@ export function normalizeProject(raw) {
     format: FORMATS.includes(raw.format) ? raw.format : '短片',
     premise: cleanText(raw.premise, 5000),
     constraints: cleanText(raw.constraints, 5000),
+    analysisNotes: cleanText(raw.analysisNotes, 4000),
+    sourceName: cleanText(raw.sourceName, 255),
     cover: raw.cover === 'rain' ? 'rain' : null,
-    nodes, mainline, links,
+    nodes, mainline, links, proposals,
   };
 }
 
@@ -151,6 +178,7 @@ export function removeNode(project, id) {
   project.nodes = project.nodes.filter(node => node.id !== id);
   project.mainline = project.mainline.filter(nodeId => nodeId !== id);
   project.links = project.links.filter(link => link.from !== id && link.to !== id);
+  project.proposals = (project.proposals || []).filter(round => round.focus !== id);
   for (const node of project.nodes) if (node.origin === id) node.origin = null;
 }
 

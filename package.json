@@ -4,13 +4,46 @@
   "private": true,
   "description": "枝幕 · 面向剧本开发的多模型故事画布",
   "type": "module",
+  "main": "desktop.mjs",
   "license": "MIT",
-  "engines": { "node": ">=22" },
-  "scripts": { "start": "node server.mjs" },
+  "author": "Zhimu Story Canvas contributors",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "electron .",
+    "preview": "node server.mjs",
+    "package:win": "electron-builder --win portable --x64"
+  },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",
     "@phosphor-icons/web": "^2.1.2",
     "docx": "^9.15.3",
+    "mammoth": "1.13.0",
+    "pdfjs-dist": "6.5.438",
     "pdfkit": "^0.20.2"
+  },
+  "devDependencies": {
+    "electron": "45.3.1",
+    "electron-builder": "26.18.0"
+  },
+  "build": {
+    "appId": "app.zhimu.storycanvas",
+    "productName": "枝幕",
+    "files": [
+      "desktop.mjs",
+      "lib/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "icon": "public/assets/syz.png"
+    },
+    "portable": {
+      "artifactName": "Zhimu-${version}-Windows-${arch}.${ext}"
+    }
   }
 }
