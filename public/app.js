@@ -11,8 +11,9 @@ import { methodFor, stageFor } from './methods.js';
 import { createModelUI } from './model-ui.js';
 import { NodeComposer, canGenerate } from './node-composer.js';
 import { createScriptImport } from './script-import.js';
-import { BEATS, COLUMN, FORMATS, LINK_LIMIT, NODE_HEIGHT, NODE_LIMIT, NODE_TYPES, PROMPT_LIMIT, STROKE_LIMIT, beatName,
-  cleanText, mainlineNodes, makeNode, newId, newProject, normalizeProject, pinNode, positionFor, removeNodes, upstreamNodes } from './story.js';
+import { BEATS, COLUMN, FORMATS, IDEA_DIRECTIONS, LINK_LIMIT, NODE_HEIGHT, NODE_LIMIT, NODE_TYPES, PROMPT_LIMIT, STROKE_LIMIT, beatName,
+  cleanText, ideaPositions, isIdeaCount, isIdeaDirection, mainlineNodes, makeNode, newId, newProject, normalizeProject, pinNode,
+  positionFor, removeNodes, upstreamNodes } from './story.js';
 import { $, button, escape, field, icon, iconButton, signed } from './ui.js';
 
 playOpening();
@@ -149,8 +150,10 @@ function saveDraft() {
   const title = cleanText(draft.title, 100) || NODE_TYPES[old.kind].title;
   const key = canGenerate(old) ? 'prompt' : 'script';
   const body = cleanText(draft.body, key === 'prompt' ? PROMPT_LIMIT : 30000);
-  if (old.title === title && old[key] === body) return false;
-  const nodes = project.nodes.map(node => node.id === old.id ? { ...node, title, [key]: body } : node);
+  const updates = { title, [key]: body };
+  if (old.kind === 'idea') updates.prompt = cleanText(draft.ideaPrompt, PROMPT_LIMIT);
+  if (Object.entries(updates).every(([field, value]) => old[field] === value)) return false;
+  const nodes = project.nodes.map(node => node.id === old.id ? { ...node, ...updates } : node);
   replaceProject({ ...project, nodes }, true, true);
   return true;
 }
@@ -220,6 +223,11 @@ function currentRound(rounds = nodeRounds(canvasState.selected)) {
   return rounds.find(round => round.id === canvasState.roundId) || rounds.at(-1);
 }
 
+function ideaBranches(source) {
+  const connected = new Set(project.links.filter(link => link.from === source.id).map(link => link.to));
+  return project.nodes.filter(node => node.kind === 'idea' && node.origin === source.id && connected.has(node.id));
+}
+
 function drawCards() {
   const models = modelUI.ordinary();
   board.update(project, { selected: canvasState.selection, generating: canvasState.generation?.nodeId,
@@ -252,7 +260,8 @@ function renderCanvas() {
   composer.render({ node, refs, indirect: node ? Math.max(0, upstreamNodes(project, [node.id]).length - refs.length) : 0,
     models: modelUI.ordinary(), profile: modelUI.forNode(node), job: canvasState.generation, rounds, round,
     method: methodFor(project.method, commerce.access.guide), guided: Boolean(commerce.access.guide),
-    index: Math.min(canvasState.optionIndex, (round?.options.length || 1) - 1), arriving: canvasState.arriving });
+    index: Math.min(canvasState.optionIndex, (round?.options.length || 1) - 1), arriving: canvasState.arriving,
+    children: node?.kind === 'idea' ? ideaBranches(node) : [] });
   canvasState.arriving = false;
   composer.position(board);
 }
@@ -367,6 +376,7 @@ function canvasMenu(point) {
     menu.show({ ...point, anchor }, [
       menuRow('edit-node', '编辑节点', 'note-pencil', { id: node.id }),
       menuRow('references', '添加参考', 'link-simple', { id: node.id }),
+      node.kind === 'idea' ? menuRow('develop-idea', '展开为剧情节点', 'git-branch', { id: node.id }) : '',
       node.kind === 'plot' ? menuRow('toggle-mainline', pinned ? '移出主线' : '纳入主线', 'list-numbers', { id: node.id }) : '',
       node.kind === 'plot' ? menuRow('edit-score', '标注情绪与张力', 'wave-sine', { id: node.id }) : '',
       divider, menuRow('delete-node', '删除节点', 'trash', { id: node.id, trailing: 'Delete', danger: true }),
@@ -424,6 +434,26 @@ function connect(from, to) {
   saveDraft();
   assignSelection([to]);
   commit(next => next.links.push({ from, to }));
+}
+
+function developIdea(id) {
+  saveDraft();
+  const source = nodeById(id);
+  if (source?.kind !== 'idea') return;
+  if (project.nodes.length >= NODE_LIMIT || project.links.length >= LINK_LIMIT) {
+    toast('当前项目已达到节点或连线上限。');
+    return;
+  }
+  const node = makeNode({ kind: 'plot', title: source.title === NODE_TYPES.idea.title ? '展开点子' : source.title,
+    origin: source.id, prompt: '把连入的点子发展成一段剧情，写清人物的行动、遇到的阻力和场尾变化。',
+    ...positionFor(project, 'scene', source) });
+  assignSelection([node.id]);
+  canvasState.recent = new Set([node.id]);
+  commit(next => {
+    next.nodes.push(node);
+    next.links.push({ from: source.id, to: node.id });
+  });
+  board.reveal(node.id);
 }
 
 function deleteNodes(ids) {
@@ -607,18 +637,20 @@ function signature(snapshot, targets) {
 }
 
 async function generate() {
-  if (canvasState.generation || !canGenerate(focus())) return;
+  const selected = focus();
+  const isIdea = selected?.kind === 'idea';
+  if (canvasState.generation || (!isIdea && !canGenerate(selected))) return;
   saveDraft();
   const node = focus();
-  const profile = useProfile(modelUI.forNode(node));
+  const model = modelUI.forNode(node);
+  const profile = useProfile(model);
   if (!profile) return;
-  const sources = upstreamNodes(project, [node.id]);
-  if (!node.prompt && ![node, ...sources].some(item => item.action || item.script || item.fixedDetails || item.consequence)) {
+  if (isIdea && !hasRoomForIdeas(node.ideaCount)) return;
+  if (!isIdea && !node.prompt && ![node, ...upstreamNodes(project, [node.id])].some(item => item.action || item.script || item.fixedDetails || item.consequence)) {
     toast('填写生成要求，或接入有内容的参考节点。');
     $('#composer-body')?.focus();
     return;
   }
-  const model = modelUI.forNode(node);
   const controller = new AbortController();
   const job = { controller, nodeId: node.id, projectId: project.id };
   const snapshot = project;
@@ -626,13 +658,20 @@ async function generate() {
   canvasState.generation = job;
   renderCanvas();
   try {
-    const response = await api('/api/ai/suggest', { profile, project: snapshot, focusId: node.id, request: node.prompt }, controller.signal);
-    const { options } = await response.json();
+    const input = { profile, project: snapshot, focusId: node.id };
+    if (isIdea) Object.assign(input, { ideaCount: node.ideaCount, ideaDirection: node.ideaDirection });
+    else input.request = node.prompt;
+    const response = await api(isIdea ? '/api/ai/brainstorm' : '/api/ai/suggest', input, controller.signal);
+    const result = await response.json();
     if (canvasState.generation !== job || project.id !== job.projectId || !nodeById(job.nodeId)) return;
     saveDraft();
     const changed = signature(project, [node.id]) !== context;
+    if (isIdea) {
+      placeIdeas(node.id, result.ideas, model, changed);
+      return;
+    }
     const round = { id: newId(), focus: node.id, beat: node.beat, methodStage: node.methodStage, scope: 'beat', label: node.title,
-      modelSource: model.name || model.model, modelId: model.id, options };
+      modelSource: model.name || model.model, modelId: model.id, options: result.options };
     canvasState.generation = null;
     if (canvasState.selected === node.id) Object.assign(canvasState, { roundId: round.id, optionIndex: 0, arriving: true });
     commit(next => {
@@ -651,6 +690,43 @@ async function generate() {
       renderCanvas();
     }
   }
+}
+
+function hasRoomForIdeas(count) {
+  if (project.nodes.length + count <= NODE_LIMIT && project.links.length + count <= LINK_LIMIT) return true;
+  toast('画布剩余空间不足，请减少点子数量或先删除不用的节点。');
+  return false;
+}
+
+function placeIdeas(sourceId, ideas, model, changed) {
+  if (!hasRoomForIdeas(ideas.length)) return;
+  const source = nodeById(sourceId);
+  const positions = ideaPositions(project, source, ideas.length);
+  const children = ideas.map(({ title, body }, index) => makeNode({ kind: 'idea', title, script: body, origin: sourceId,
+    modelId: model.id, modelSource: model.name || model.model, ...positions[index] }));
+  const showBatch = canvasState.selected === sourceId && !board.gesture;
+  canvasState.generation = null;
+  if (showBatch) assignSelection([]);
+  canvasState.recent = new Set(children.map(node => node.id));
+  commit(next => {
+    next.nodes.push(...children);
+    next.links.push(...children.map(node => ({ from: sourceId, to: node.id })));
+    next.nodes.find(node => node.id === sourceId).modelId ||= model.id;
+  });
+  if (showBatch) {
+    board.fit([sourceId, ...children.map(node => node.id)]);
+    board.viewport.focus({ preventScroll: true });
+  }
+  toast(`已生成 ${children.length} 个点子节点。${changed ? '本轮使用了发散开始时的素材。' : '按 Ctrl+Z 可整批撤回。'}`);
+}
+
+function chooseIdeaDirection(direction, refocus = false) {
+  const node = focus();
+  if (node?.kind !== 'idea' || !isIdeaDirection(direction)) return;
+  if (direction !== node.ideaDirection) {
+    commit(next => { next.nodes.find(item => item.id === node.id).ideaDirection = direction; });
+  }
+  if (refocus) $(`#idea-tab-${direction}`)?.focus({ preventScroll: true });
 }
 
 function chosenCandidate() {
@@ -883,8 +959,9 @@ document.addEventListener('input', event => {
     menu.place();
     return;
   }
-  if (!['composer-body', 'composer-title'].includes(event.target.id) || !focus()) return;
-  pendingDraft = { id: canvasState.selected, title: $('#composer-title').value, body: $('#composer-body').value };
+  if (!['composer-body', 'composer-title', 'idea-prompt'].includes(event.target.id) || !focus()) return;
+  pendingDraft = { id: canvasState.selected, title: $('#composer-title').value, body: $('#composer-body').value,
+    ideaPrompt: $('#idea-prompt')?.value };
   if (event.target.id === 'composer-body') {
     composer.adjustText();
     composer.position(board);
@@ -905,10 +982,14 @@ document.addEventListener('change', event => {
     const id = canvasState.selected;
     const stage = stageFor(project.method, event.target.value);
     commit(next => { next.nodes.find(node => node.id === id).methodStage = stage?.id || ''; });
-  } else if (event.target.id === 'node-model' && focus()?.kind === 'plot') {
+  } else if (event.target.id === 'node-model' && ['plot', 'idea'].includes(focus()?.kind)) {
     const id = canvasState.selected;
     const modelId = event.target.value || null;
     commit(next => { next.nodes.find(node => node.id === id).modelId = modelId; });
+  } else if (event.target.id === 'idea-count' && focus()?.kind === 'idea') {
+    const id = canvasState.selected;
+    const count = Number(event.target.value);
+    if (isIdeaCount(count)) commit(next => { next.nodes.find(node => node.id === id).ideaCount = count; });
   } else if (event.target.id === 'round-select') {
     saveDraft();
     canvasState.roundId = event.target.value;
@@ -1018,7 +1099,19 @@ document.addEventListener('click', event => {
     case 'minimap': control.setAttribute('aria-pressed', String(board.toggleMap())); break;
     case 'undo': navigateHistory('undo'); break;
     case 'redo': navigateHistory('redo'); break;
-    case 'generate': void generate(); break;
+    case 'generate':
+    case 'brainstorm': void generate(); break;
+    case 'idea-direction': chooseIdeaDirection(id, true); break;
+    case 'view-idea-branches': {
+      const source = focus();
+      if (source?.kind === 'idea') {
+        selectNode(null);
+        board.fit([source.id, ...ideaBranches(source).map(node => node.id)]);
+        board.viewport.focus({ preventScroll: true });
+      }
+      break;
+    }
+    case 'develop-idea': developIdea(id); break;
     case 'cancel-generation': canvasState.generation?.controller.abort(); break;
     case 'show-candidate': saveDraft(); canvasState.optionIndex = Number(id); renderCanvas(); break;
     case 'candidate-detail': candidateDetail(); break;
@@ -1041,6 +1134,16 @@ document.addEventListener('keydown', event => {
   if (modified && event.key === 'Enter' && composer.element.contains(event.target)) {
     event.preventDefault();
     void generate();
+    return;
+  }
+  const ideaTab = event.target.closest?.('[data-action=idea-direction]');
+  if (ideaTab && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+    const directions = Object.keys(IDEA_DIRECTIONS);
+    const index = directions.indexOf(ideaTab.dataset.id);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? directions.length - 1
+      : (index + (event.key === 'ArrowLeft' ? -1 : 1) + directions.length) % directions.length;
+    event.preventDefault();
+    chooseIdeaDirection(directions[next], true);
     return;
   }
   if (event.key === 'Escape') {

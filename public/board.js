@@ -224,10 +224,11 @@ export class StoryBoard {
     return { width: rect.width, top: 73, bottom: $('#emotion-panel').getBoundingClientRect().top - rect.top - 16 };
   }
 
-  fit() {
+  fit(ids) {
     const { width, top, bottom } = this.available();
     const height = Math.max(140, bottom - top);
-    const all = boundsOf([...this.nodes.values()]);
+    const nodes = ids ? ids.map(id => this.nodes.get(id)).filter(Boolean) : [...this.nodes.values()];
+    const all = boundsOf(nodes);
     if (!all) {
       this.zoom = 1;
       this.x = width / 2;
@@ -306,7 +307,7 @@ export class StoryBoard {
     else if (this.tool === 'ink') {
       const point = this.toWorld(event.clientX, event.clientY, rect);
       Object.assign(g, { type: 'ink', points: [[point.x, point.y]] });
-    } else if (this.tool === 'note' || this.tool === 'text') g.type = 'place';
+    } else if (this.tool === 'idea' || this.tool === 'text') g.type = 'place';
     else if (port === 'in') { this.usePort(port, id); return; }
     else if (port === 'out') Object.assign(g, { type: 'wire', id, port });
     else if (group || id) Object.assign(g, { type: 'nodes', id, ids: new Set(group?.nodes || (this.selected.has(id) ? this.selected : [id])), group: Boolean(group) });

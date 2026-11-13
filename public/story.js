@@ -19,7 +19,7 @@ export const PROVIDERS = {
 };
 export const NODE_TYPES = {
   text: { label: '文本', icon: 'text-aa', title: '文本节点' },
-  note: { label: '便签', icon: 'note', title: '便签' },
+  idea: { label: '点子', icon: 'lightbulb', title: '新点子' },
   setting: { label: '共享设定', icon: 'bookmark-simple', title: '共享设定' },
   plot: { label: '剧情', icon: 'film-strip', title: '剧情节点' },
   agent: { label: 'Agent', icon: 'sparkle', title: 'Agent' },
@@ -32,6 +32,19 @@ export const NODE_LIMIT = 500;
 export const LINK_LIMIT = 1500;
 export const STROKE_LIMIT = 250;
 export const STROKE_POINTS = 450;
+export const IDEA_LIMIT = 8;
+export const DEFAULT_IDEA_COUNT = 3;
+export const IDEA_DIRECTIONS = {
+  auto: { label: '模型自由想', guidance: '自由选择切入点。围绕现有素材找出不同的故事可能。素材很少或为空时，直接提出各自能独立成立的故事种子。' },
+  plot: { label: '剧情走向', guidance: '给出不同的触发事件、人物决定或后续走向，并说明它会怎样改变局势。' },
+  character: { label: '人物关系', guidance: '从人物的欲望、利益或关系变化切入，让具体行为引起另一人的回应。' },
+  conflict: { label: '冲突与两难', guidance: '设计主角要争取的目标和对立力量，让不同选择分别产生看得见的代价。' },
+  suspense: { label: '悬念反转', guidance: '用已出现或可以提前埋下的线索改变观众理解，并说明真相会如何影响人物行动。' },
+  scene: { label: '场景构想', guidance: '提出能落成一场戏的处境，写清谁来到哪里、采取什么行动，以及场尾发生的变化。' },
+};
+
+export const isIdeaCount = count => Number.isInteger(count) && count >= 1 && count <= IDEA_LIMIT;
+export const isIdeaDirection = direction => typeof direction === 'string' && Object.hasOwn(IDEA_DIRECTIONS, direction);
 
 const idPattern = /^[a-zA-Z0-9_-]{1,90}$/;
 export const newId = () => globalThis.crypto.randomUUID();
@@ -65,12 +78,20 @@ export function plotContent(raw = {}) {
 }
 
 export function makeNode(raw = {}) {
+  const legacyNote = raw.kind === 'note';
+  const kind = legacyNote ? 'idea' : Object.hasOwn(NODE_TYPES, raw.kind) ? raw.kind : 'plot';
+  const content = plotContent(raw);
+  if (kind === 'idea' && (!cleanText(raw.title, 100) || (legacyNote && content.title === '便签'))) content.title = NODE_TYPES.idea.title;
   return {
     id: idPattern.test(raw.id ?? '') ? raw.id : newId(),
-    kind: Object.hasOwn(NODE_TYPES, raw.kind) ? raw.kind : 'plot',
+    kind,
     beat: Object.hasOwn(BEATS, raw.beat) ? raw.beat : 'scene',
     methodStage: normalizeStage(raw.methodStage),
-    ...plotContent(raw),
+    ...content,
+    ...(kind === 'idea' ? {
+      ideaCount: isIdeaCount(raw.ideaCount) ? raw.ideaCount : DEFAULT_IDEA_COUNT,
+      ideaDirection: isIdeaDirection(raw.ideaDirection) ? raw.ideaDirection : 'auto',
+    } : {}),
     prompt: cleanText(raw.prompt, PROMPT_LIMIT),
     modelId: idPattern.test(raw.modelId ?? '') ? raw.modelId : null,
     modelSource: cleanText(raw.modelSource, 120),
@@ -181,6 +202,10 @@ export function normalizeProject(raw) {
   };
 }
 
+function overlapsAt(nodes, x, y) {
+  return nodes.some(node => Math.abs(x - node.x) < NODE_WIDTH + 14 && Math.abs(y - node.y) < NODE_HEIGHT + 14);
+}
+
 export function positionFor(project, beat, focus) {
   const stage = STORY_ORDER.indexOf(beat);
   const hasPeer = stage >= 0 && project.nodes.some(node => node.beat === beat);
@@ -188,17 +213,37 @@ export function positionFor(project, beat, focus) {
     ? { x: stage * COLUMN, y: 0 }
     : focus ? { x: focus.x + (beat === 'scene' ? COLUMN : 0), y: focus.y + (beat === 'scene' ? 0 : 248) }
       : { x: 0, y: 0 };
-  const overlaps = (x, y) => project.nodes.some(node =>
-    Math.abs(x - node.x) < NODE_WIDTH + 14 && Math.abs(y - node.y) < NODE_HEIGHT + 14);
-  if (!overlaps(preferred.x, preferred.y)) return preferred;
   for (let row = 0; row <= project.nodes.length; row += 1) {
     for (const column of [0, 1, -1, 2, -2]) {
       const x = preferred.x + column * COLUMN;
       const y = preferred.y + row * (NODE_HEIGHT + 40);
-      if (!overlaps(x, y)) return { x, y };
+      if (!overlapsAt(project.nodes, x, y)) return { x, y };
     }
   }
   return preferred;
+}
+
+export function ideaPositions(project, source, count) {
+  const positions = [];
+  const rowsPerColumn = count <= 3 ? count : Math.ceil(count / 2);
+  const columnCount = Math.ceil(count / rowsPerColumn);
+  for (let index = 0; index < count; index += 1) {
+    const column = Math.floor(index / rowsPerColumn);
+    const row = index % rowsPerColumn;
+    const rows = Math.min(rowsPerColumn, count - column * rowsPerColumn);
+    positions.push({
+      x: source.x + (column + 1) * (COLUMN + 26),
+      y: source.y + (row - (rows - 1) / 2) * (NODE_HEIGHT + 42),
+    });
+  }
+  const step = (COLUMN + 26) * columnCount;
+  for (let block = 0; block <= project.nodes.length; block += 1) {
+    const shift = block * step;
+    if (positions.every(({ x, y }) => !overlapsAt(project.nodes, x + shift, y))) {
+      return positions.map(({ x, y }) => ({ x: x + shift, y }));
+    }
+  }
+  return positions;
 }
 
 export function pinNode(project, node) {
