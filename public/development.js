@@ -1,3 +1,4 @@
+import { effortChoices, validEffort } from './reasoning.js';
 import { DECISION_LIMIT, MAX_SCENES, MIN_SCENES, SYNOPSIS_LIMIT, cleanText } from './story.js';
 import { $, button, escape, field, icon } from './ui.js';
 
@@ -25,6 +26,12 @@ export function createDevelopment({ modal, show, close, api, profiles, openSetti
     state.stale = true;
     render(state);
     return false;
+  }
+
+  function effortField(state) {
+    const model = profiles().find(profile => profile.id === state.modelId);
+    const choices = effortChoices(model);
+    return choices.length ? field('effort', '推理档位', validEffort(model, state.effort), { type: 'select', choices }) : '';
   }
 
   function render(state, moveFocus = false) {
@@ -64,7 +71,8 @@ export function createDevelopment({ modal, show, close, api, profiles, openSetti
       }[operation];
       body = `<p class="development-intro">${escape(canRequest ? prompt : operation === 'scenes' ? '先在梗概节点写下故事内容。' :
         '先在节点里写一点故事，或连入一个有内容的参考。')}</p>
-        <form data-form="development-generate">${profilesAvailable.length ? `<div class="${count ? 'modal-grid' : ''}">${models}${count}</div>` :
+        <form data-form="development-generate">${profilesAvailable.length ? `<div class="modal-grid">${models}
+        <div id="development-effort">${effortField(state)}</div>${count}</div>` :
         '<p class="field-hint">在用户设置连接一个模型后即可生成。</p>'}
         <div class="modal-footer">${profilesAvailable.length ? `<button type="submit" class="button primary"${canRequest ? '' : ' disabled'}>${mode.verb}</button>`
         : button('development-models', '用户设置', { glyph: 'gear-six', style: 'primary' })}</div></form>`;
@@ -88,7 +96,8 @@ export function createDevelopment({ modal, show, close, api, profiles, openSetti
 
   async function request(state, operation, details = {}) {
     if (!active(state) || state.controller || !valid(state)) return;
-    if (!profiles().some(profile => profile.id === state.modelId)) {
+    const profile = profiles().find(profile => profile.id === state.modelId);
+    if (!profile) {
       state.modelId = '';
       state.error = '请选一个可用的模型后再试。';
       render(state);
@@ -101,7 +110,7 @@ export function createDevelopment({ modal, show, close, api, profiles, openSetti
     render(state);
     try {
       const response = await api('/api/ai/develop', { profile: { id: state.modelId }, project: state.snapshot,
-        operation, sourceIds: state.ids, ...details }, controller.signal);
+        operation, sourceIds: state.ids, reasoningEffort: validEffort(profile, state.effort), ...details }, controller.signal);
       const result = await response.json();
       if (!active(state) || state.controller !== controller) return;
       state.controller = null;
@@ -153,6 +162,7 @@ export function createDevelopment({ modal, show, close, api, profiles, openSetti
     const data = new FormData(form);
     if (type === 'development-generate') {
       state.modelId = data.get('modelId');
+      state.effort = validEffort(profiles().find(profile => profile.id === state.modelId), data.get('effort'));
       if (state.operation === 'scenes') state.count = Number(data.get('count'));
       void request(state, state.operation, state.operation === 'scenes' ? { count: state.count } : {});
     } else if (type === 'development-answer') {
@@ -174,6 +184,14 @@ export function createDevelopment({ modal, show, close, api, profiles, openSetti
       }
       commit(state, result, data.get('placement'));
     }
+  });
+
+  modal.addEventListener('change', event => {
+    if (!session || !active(session) || event.target.id !== 'field-modelId' ||
+        event.target.form?.dataset.form !== 'development-generate') return;
+    session.modelId = event.target.value;
+    session.effort = '';
+    $('#development-effort', modal).innerHTML = effortField(session);
   });
 
   modal.addEventListener('close', () => { if (!modal.open) stop(); });

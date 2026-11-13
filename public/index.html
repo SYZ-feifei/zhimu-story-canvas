@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/app.css">
   <link rel="stylesheet" href="/chrome.css">
   <link rel="stylesheet" href="/board.css">
+  <link rel="stylesheet" href="/agent-chat.css">
 </head>
 <body>
   <div class="launch-screen" id="launch-screen" aria-hidden="true">
@@ -86,7 +87,35 @@
           <button class="icon-button" type="button" data-action="find-node" title="查找节点 (Ctrl+F)" aria-label="查找节点"><i class="ph ph-magnifying-glass" aria-hidden="true"></i></button>
           <button class="button add-dock-button" type="button" data-action="dock-add"><i class="ph ph-plus" aria-hidden="true"></i>添加节点</button>
         </div>
+        <button id="agent-toggle" class="button agent-toggle" type="button" data-action="agent-toggle" data-board-overlay
+          aria-controls="agent-panel" aria-expanded="false"><i class="ph ph-chat-circle-dots" aria-hidden="true"></i>Agent</button>
       </div>
+      <aside id="agent-panel" class="agent-panel" aria-labelledby="agent-title" hidden>
+        <header class="agent-header">
+          <div class="agent-title"><span class="agent-icon"><i class="ph ph-sparkle" aria-hidden="true"></i></span><h2 id="agent-title">Agent</h2></div>
+          <button class="icon-button" type="button" data-action="agent-close" title="收起 Agent" aria-label="收起 Agent"><i class="ph ph-x" aria-hidden="true"></i></button>
+        </header>
+        <div class="agent-config">
+          <label><span>模型</span><select id="agent-model"></select></label>
+          <label><span>推理档位</span><select id="agent-effort"></select></label>
+          <button class="icon-button" type="button" data-action="agent-settings" title="用户设置" aria-label="用户设置"><i class="ph ph-gear-six" aria-hidden="true"></i></button>
+        </div>
+        <div id="agent-messages" class="agent-messages" role="log" aria-label="Agent 对话"></div>
+        <form id="agent-form" class="agent-form">
+          <div id="agent-references" class="agent-references" aria-label="画布参考"></div>
+          <p id="agent-error" class="agent-error" role="alert" hidden></p>
+          <label class="agent-input-wrap" for="agent-input">
+            <span class="agent-input-label">给 Agent 发消息</span>
+            <textarea id="agent-input" rows="3" placeholder="聊剧情、人物或下一场怎么写…" aria-describedby="agent-keyboard"></textarea>
+          </label>
+          <div class="agent-actions">
+            <button class="button quiet compact" id="agent-add-selection" type="button" data-action="agent-add-selection"><i class="ph ph-link-simple" aria-hidden="true"></i>引用所选节点</button>
+            <span id="agent-keyboard">Enter 发送</span>
+            <button class="button primary compact" id="agent-send" type="submit" title="发送"><i class="ph ph-arrow-up" aria-hidden="true"></i>发送</button>
+            <button class="button compact" id="agent-stop" type="button" data-action="agent-stop" hidden><i class="ph ph-stop" aria-hidden="true"></i>停止</button>
+          </div>
+        </form>
+      </aside>
     </main>
   </div>
   <div id="canvas-menu" class="pop-menu" role="menu" hidden></div>

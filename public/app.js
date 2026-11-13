@@ -1,3 +1,4 @@
+import { createAgentChat } from './agent-chat.js';
 import { StoryBoard } from './board.js';
 import { CanvasMenu, divider, menuRow } from './canvas-menu.js';
 import { createCommerceUI } from './commerce-ui.js';
@@ -11,10 +12,11 @@ import { methodGuide, methodPicker } from './method-picker.js';
 import { methodFor, stageFor } from './methods.js';
 import { createModelUI } from './model-ui.js';
 import { NodeComposer, canGenerate } from './node-composer.js';
+import { validEffort } from './reasoning.js';
 import { createScriptImport } from './script-import.js';
 import { BEATS, COLUMN, FORMATS, IDEA_DIRECTIONS, LINK_LIMIT, NODE_HEIGHT, NODE_LIMIT, NODE_TYPES, PROMPT_LIMIT, STROKE_LIMIT, beatName,
-  cleanText, developmentContext, hasStory, ideaPositions, isIdeaCount, isIdeaDirection, mainlineNodes, makeNode, markStoryRevisions,
-  newId, newProject, normalizeProject, pinNode, positionFor, removeNodes, upstreamNodes } from './story.js';
+  cleanText, developmentContext, hasStory, ideaPositions, isIdeaCount, isIdeaDirection, isPlotCount, mainlineNodes,
+  makeNode, markStoryRevisions, newId, newProject, normalizeProject, pinNode, positionFor, removeNodes, upstreamNodes } from './story.js';
 import { $, button, escape, field, icon, iconButton, signed } from './ui.js';
 
 playOpening();
@@ -51,6 +53,16 @@ const board = new StoryBoard({
 const modelUI = createModelUI({ modal, show: showModal, api, legacyKey: legacyModelKey, notice: toast, onChange: () => {
   if (canvasState.screen === 'canvas') { saveDraft(); renderCanvas(); }
 } });
+const agentChat = createAgentChat({
+  api, storageKey: `zhimu.agent.${login.account.id}`, profiles: modelUI.agentProfiles,
+  selectedIds: () => [...canvasState.selection],
+  readProject: flush => { if (flush) saveDraft(); return project; },
+  openSettings: () => modelUI.open(), saveNote: saveAgentNote, notice: toast,
+  onLayout: open => {
+    if (open && canvasState.selected) board.reveal(canvasState.selected);
+    else composer.position(board);
+  },
+});
 const development = createDevelopment({
   modal, show: showModal, close: closeModal, api, profiles: modelUI.ordinary, notice: toast,
   openSettings: () => modelUI.open(), read: readDevelopment, isCurrent: currentDevelopment, apply: applyDevelopment,
@@ -178,6 +190,7 @@ function navigateHistory(direction) {
 }
 
 function stopJobs() {
+  agentChat.leave();
   development.stop();
   canvasState.generation?.controller.abort();
   canvasState.assessment?.controller.abort();
@@ -220,6 +233,7 @@ function openProject(id) {
   history.undo.length = history.redo.length = 0;
   $('#home-header').hidden = $('#home-screen').hidden = true;
   $('#workspace-screen').hidden = false;
+  agentChat.enter(id);
   document.title = `${project.title} · 枝幕`;
   if (!invalidStorage) persist();
   renderCanvas();
@@ -275,12 +289,13 @@ function renderCanvas() {
   const round = currentRound(rounds);
   const refs = node ? project.links.filter(link => link.to === node.id).map(link => nodeById(link.from)).filter(Boolean) : [];
   composer.render({ node, refs, indirect: node ? Math.max(0, upstreamNodes(project, [node.id]).length - refs.length) : 0,
-    models: modelUI.ordinary(), profile: modelUI.forNode(node), job: canvasState.generation, rounds, round,
+    models: node?.kind === 'agent' ? modelUI.agentProfiles() : modelUI.ordinary(), profile: modelUI.forNode(node), job: canvasState.generation, rounds, round,
     method: methodFor(project.method, commerce.access.guide), guided: Boolean(commerce.access.guide),
     index: Math.min(canvasState.optionIndex, (round?.options.length || 1) - 1), arriving: canvasState.arriving,
     children: node?.kind === 'idea' ? ideaBranches(node) : [] });
   canvasState.arriving = false;
   composer.position(board);
+  agentChat.update();
 }
 
 function assignSelection(ids) {
@@ -386,6 +401,7 @@ function canvasMenu(point) {
     const anchor = $('.node-face', board.elements.get(node.id));
     if (canvasState.selection.size > 1) {
       menu.show({ ...point, anchor }, [menuRow('group-nodes', '将所选节点分组', 'stack'), divider,
+        menuRow('agent-reference-selection', '引用到 Agent', 'chat-circle-dots'),
         menuRow('delete-selection', `删除 ${canvasState.selection.size} 个节点`, 'trash', { trailing: 'Delete', danger: true })].join(''));
       return;
     }
@@ -393,6 +409,7 @@ function canvasMenu(point) {
     menu.show({ ...point, anchor }, [
       menuRow('edit-node', '编辑节点', 'note-pencil', { id: node.id }),
       menuRow('references', '添加参考', 'link-simple', { id: node.id }),
+      menuRow('agent-reference-node', '引用到 Agent', 'chat-circle-dots', { id: node.id }),
       ['idea', 'plot'].includes(node.kind) ? menuRow('continue-story', '接着写', 'arrow-bend-down-right', { id: node.id }) : '',
       ['idea', 'plot'].includes(node.kind) ? menuRow('create-synopsis', '整理为故事梗概', 'paragraph', { id: node.id }) : '',
       node.kind === 'synopsis' ? menuRow('split-synopsis', '拆成分场', 'list-checks', { id: node.id }) : '',
@@ -434,8 +451,7 @@ function createNode(kind, point = menuPoint) {
   const sourceId = nodeById(point.sourceId)?.id;
   if (sourceId && project.links.length >= LINK_LIMIT) { toast('该项目已达到连线上限。'); return; }
   const position = point.position || board.toWorld(point.clientX, point.clientY);
-  const node = makeNode({ kind, title: NODE_TYPES[kind].title, x: Math.round(position.x), y: Math.round(position.y),
-    modelId: kind === 'agent' ? 'agent' : null });
+  const node = makeNode({ kind, title: NODE_TYPES[kind].title, x: Math.round(position.x), y: Math.round(position.y) });
   assignSelection([node.id]);
   canvasState.recent = new Set([node.id]);
   commit(next => {
@@ -468,7 +484,7 @@ function developIdea(id) {
   }
   const node = makeNode({ kind: 'plot', title: source.title === NODE_TYPES.idea.title ? '展开点子' : source.title,
     origin: source.id, prompt: '把连入的点子发展成一段剧情，写清人物的行动、遇到的阻力和场尾变化。',
-    ...positionFor(project, 'scene', source) });
+    modelId: source.modelId, reasoningEffort: source.reasoningEffort, ...positionFor(project, 'scene', source) });
   assignSelection([node.id]);
   canvasState.recent = new Set([node.id]);
   commit(next => {
@@ -476,6 +492,29 @@ function developIdea(id) {
     next.links.push({ from: source.id, to: node.id });
   });
   board.reveal(node.id);
+}
+
+function saveAgentNote(message) {
+  saveDraft();
+  const nodes = new Map(project.nodes.map(node => [node.id, node]));
+  const refs = message.refs.filter(id => nodes.has(id));
+  if (project.nodes.length >= NODE_LIMIT || project.links.length + refs.length > LINK_LIMIT) {
+    toast('画布剩余空间不足。可先移除不用的节点或连线。');
+    return;
+  }
+  const title = cleanText(message.text.split('\n')[0], 45) || 'Agent 点子';
+  const source = nodes.get(refs.at(-1));
+  const node = makeNode({ kind: 'idea', title, script: message.text, reasoningEffort: message.modelId === 'agent' ? '' : message.effort,
+    modelId: message.modelId === 'agent' ? null : message.modelId, modelSource: message.model, origin: source?.id,
+    ...positionFor(project, 'scene', source) });
+  assignSelection([node.id]);
+  canvasState.recent = new Set([node.id]);
+  commit(next => {
+    next.nodes.push(node);
+    next.links.push(...refs.map(from => ({ from, to: node.id })));
+  });
+  board.reveal(node.id);
+  toast('已存为点子，按 Ctrl+Z 可撤回。');
 }
 
 function readDevelopment(ids, mainline) {
@@ -487,7 +526,7 @@ function readDevelopment(ids, mainline) {
   const route = developmentContext(project, sourceIds);
   return { ids: sourceIds, sources, snapshot: project, route: JSON.stringify(route),
     prompt: sources.at(-1).prompt, hasMaterial: [...route.route, ...route.references].some(hasStory),
-    model: modelUI.forNode(sources.at(-1)) };
+    model: modelUI.forNode(sources.at(-1)), effort: sources.at(-1).reasoningEffort };
 }
 
 function currentDevelopment(state) {
@@ -503,7 +542,7 @@ function currentDevelopment(state) {
 
 function applyDevelopment(state, result, placement, model) {
   const source = nodeById(state.ids.at(-1));
-  const provenance = { modelId: state.modelId, modelSource: model?.name || model?.model || '' };
+  const provenance = { modelId: state.modelId, reasoningEffort: state.effort, modelSource: model?.name || model?.model || '' };
   if (state.operation === 'draft') {
     commit(next => {
       const node = next.nodes.find(item => item.id === source.id);
@@ -784,20 +823,20 @@ async function generate() {
   canvasState.generation = job;
   renderCanvas();
   try {
-    const input = { profile, project: snapshot, focusId: node.id };
+    const input = { profile, project: snapshot, focusId: node.id, reasoningEffort: validEffort(model, node.reasoningEffort) };
     if (isIdea) Object.assign(input, { ideaCount: node.ideaCount, ideaDirection: node.ideaDirection });
-    else input.request = node.prompt;
+    else Object.assign(input, { request: node.prompt, plotCount: node.plotCount });
     const response = await api(isIdea ? '/api/ai/brainstorm' : '/api/ai/suggest', input, controller.signal);
     const result = await response.json();
     if (canvasState.generation !== job || project.id !== job.projectId || !nodeById(job.nodeId)) return;
     saveDraft();
     const changed = signature(project, [node.id]) !== context;
     if (isIdea) {
-      placeIdeas(node.id, result.ideas, model, changed);
+      placeIdeas(node.id, result.ideas, model, input.reasoningEffort, changed);
       return;
     }
     const round = { id: newId(), focus: node.id, beat: node.beat, methodStage: node.methodStage, scope: 'beat', label: node.title,
-      modelSource: model.name || model.model, modelId: model.id, options: result.options };
+      modelSource: model.name || model.model, modelId: model.id, reasoningEffort: input.reasoningEffort, options: result.options };
     canvasState.generation = null;
     if (canvasState.selected === node.id) Object.assign(canvasState, { roundId: round.id, optionIndex: 0, arriving: true });
     commit(next => {
@@ -824,12 +863,12 @@ function hasRoomForIdeas(count) {
   return false;
 }
 
-function placeIdeas(sourceId, ideas, model, changed) {
+function placeIdeas(sourceId, ideas, model, effort, changed) {
   if (!hasRoomForIdeas(ideas.length)) return;
   const source = nodeById(sourceId);
   const positions = ideaPositions(project, source, ideas.length);
   const children = ideas.map(({ title, body }, index) => makeNode({ kind: 'idea', title, script: body, origin: sourceId,
-    modelId: model.id, modelSource: model.name || model.model, ...positions[index] }));
+    modelId: model.id, reasoningEffort: effort, modelSource: model.name || model.model, ...positions[index] }));
   const showBatch = canvasState.selected === sourceId && !board.gesture;
   canvasState.generation = null;
   if (showBatch) assignSelection([]);
@@ -874,29 +913,37 @@ function candidateDetail() {
       ${button('apply-candidate', '应用到节点', { glyph: 'check', style: 'primary' })}</div></div>`);
 }
 
-function useCandidate(branch) {
+function useCandidate(action) {
   saveDraft();
   const picked = chosenCandidate();
   const current = focus();
   if (!picked || !current) return;
   const { round, option } = picked;
-  if (branch && (project.nodes.length >= NODE_LIMIT || project.links.length >= LINK_LIMIT)) {
-    toast('当前项目已达到节点或连线上限。');
-    return;
-  }
-  closeModal();
-  if (branch) {
-    const node = makeNode({ ...option, kind: 'plot', beat: round.beat, methodStage: round.methodStage, origin: current.id, modelSource: round.modelSource,
-      modelId: round.modelId === 'agent' ? null : round.modelId, ...positionFor(project, round.beat, current) });
-    assignSelection([node.id]);
-    canvasState.recent = new Set([node.id]);
+  if (action !== 'apply') {
+    const options = action === 'all' ? round.options : [option];
+    if (project.nodes.length + options.length > NODE_LIMIT || project.links.length + options.length > LINK_LIMIT) {
+      toast('画布剩余空间不足，可先选一条分支，或移除不用的节点。');
+      return;
+    }
+    closeModal();
+    const batch = action === 'all';
+    const positions = batch ? ideaPositions(project, current, options.length) : [positionFor(project, round.beat, current)];
+    const nodes = options.map((item, index) => makeNode({ ...item, kind: 'plot', beat: round.beat, methodStage: round.methodStage,
+      origin: current.id, modelSource: round.modelSource, reasoningEffort: round.modelId === 'agent' ? '' : round.reasoningEffort,
+      modelId: round.modelId === 'agent' ? null : round.modelId, ...positions[index] }));
+    assignSelection(batch ? [] : [nodes[0].id]);
+    canvasState.recent = new Set(nodes.map(node => node.id));
     commit(next => {
-      next.nodes.push(node);
-      next.links.push({ from: current.id, to: node.id });
+      next.nodes.push(...nodes);
+      next.links.push(...nodes.map(node => ({ from: current.id, to: node.id })));
     });
-    board.reveal(node.id);
-    toast('已创建并连接分支');
+    if (batch) {
+      board.fit([current.id, ...nodes.map(node => node.id)]);
+      board.viewport.focus({ preventScroll: true });
+    } else board.reveal(nodes[0].id);
+    toast(batch ? `已建立 ${nodes.length} 条剧情分支，按 Ctrl+Z 可整批撤回。` : '已创建并连接分支');
   } else {
+    closeModal();
     commit(next => {
       const node = next.nodes.find(item => item.id === current.id);
       Object.assign(node, option, { script: option.script || node.script, evidence: option.evidence || node.evidence, modelSource: round.modelSource });
@@ -909,7 +956,9 @@ async function assess() {
   if (canvasState.assessment) { canvasState.assessment.controller.abort(); return; }
   saveDraft();
   if (!project.mainline.length) return;
-  const profile = useProfile((focus()?.kind === 'plot' && modelUI.forNode(focus())) || modelUI.defaultProfile());
+  const selected = focus()?.kind === 'plot' ? focus() : null;
+  const model = (selected && modelUI.forNode(selected)) || modelUI.defaultProfile();
+  const profile = useProfile(model);
   if (!profile) return;
   const controller = new AbortController();
   const job = { controller, projectId: project.id };
@@ -919,7 +968,8 @@ async function assess() {
   canvasState.chartOpen = true;
   renderCanvas();
   try {
-    const response = await api('/api/ai/assess', { profile, project: snapshot }, controller.signal);
+    const response = await api('/api/ai/assess', { profile, project: snapshot,
+      reasoningEffort: validEffort(model, selected?.reasoningEffort) }, controller.signal);
     const { marks } = await response.json();
     if (canvasState.assessment !== job || project.id !== job.projectId) return;
     saveDraft();
@@ -1110,14 +1160,22 @@ document.addEventListener('change', event => {
     const id = canvasState.selected;
     const stage = stageFor(project.method, event.target.value);
     commit(next => { next.nodes.find(node => node.id === id).methodStage = stage?.id || ''; });
-  } else if (event.target.id === 'node-model' && ['plot', 'idea', 'synopsis'].includes(focus()?.kind)) {
+  } else if (event.target.id === 'node-model' && ['plot', 'idea', 'synopsis', 'agent'].includes(focus()?.kind)) {
     const id = canvasState.selected;
     const modelId = event.target.value || null;
-    commit(next => { next.nodes.find(node => node.id === id).modelId = modelId; });
+    commit(next => { Object.assign(next.nodes.find(node => node.id === id), { modelId, reasoningEffort: '' }); });
   } else if (event.target.id === 'idea-count' && focus()?.kind === 'idea') {
     const id = canvasState.selected;
     const count = Number(event.target.value);
     if (isIdeaCount(count)) commit(next => { next.nodes.find(node => node.id === id).ideaCount = count; });
+  } else if (event.target.id === 'plot-count' && canGenerate(focus())) {
+    const id = canvasState.selected;
+    const count = Number(event.target.value);
+    if (isPlotCount(count)) commit(next => { next.nodes.find(node => node.id === id).plotCount = count; });
+  } else if (event.target.id === 'node-effort' && focus()) {
+    const id = canvasState.selected;
+    const effort = validEffort(modelUI.forNode(focus()), event.target.value);
+    commit(next => { next.nodes.find(node => node.id === id).reasoningEffort = effort; });
   } else if (event.target.id === 'round-select') {
     saveDraft();
     canvasState.roundId = event.target.value;
@@ -1165,6 +1223,7 @@ document.addEventListener('click', event => {
   if (modelUI.action(action, control)) return;
   if (commerce.action(action, control)) return;
   if (development.action(action, control)) return;
+  if (agentChat.action(action, control)) return;
   switch (action) {
     case 'home': goHome(); break;
     case 'account':
@@ -1196,6 +1255,7 @@ document.addEventListener('click', event => {
     }
     case 'confirm-project-delete':
       library.projects = library.projects.filter(item => item.id !== id);
+      agentChat.forget(id);
       if (library.active === id) library.active = library.projects[0]?.id ?? null;
       project = library.projects.find(item => item.id === library.active);
       persist();
@@ -1235,6 +1295,8 @@ document.addEventListener('click', event => {
     case 'delete-node': deleteNodes([id]); break;
     case 'delete-selection': deleteNodes(canvasState.selection); break;
     case 'references': referencesDialog(id); break;
+    case 'agent-reference-node': agentChat.attach([id]); break;
+    case 'agent-reference-selection': agentChat.attach([...canvasState.selection]); break;
     case 'connect-reference':
       closeModal();
       connect(id, canvasState.selected);
@@ -1280,8 +1342,9 @@ document.addEventListener('click', event => {
     case 'cancel-generation': canvasState.generation?.controller.abort(); break;
     case 'show-candidate': saveDraft(); canvasState.optionIndex = Number(id); renderCanvas(); break;
     case 'candidate-detail': candidateDetail(); break;
-    case 'branch-candidate': useCandidate(true); break;
-    case 'apply-candidate': useCandidate(false); break;
+    case 'branch-candidate': useCandidate('single'); break;
+    case 'branch-all-candidates': useCandidate('all'); break;
+    case 'apply-candidate': useCandidate('apply'); break;
     case 'assess': void assess(); break;
     case 'export': exportDialog(); break;
     case 'download': void download(id, control); break;
@@ -1313,6 +1376,7 @@ document.addEventListener('keydown', event => {
   }
   if (event.key === 'Escape') {
     if (menu.close(true)) return;
+    if (agentChat.handleEscape(event.target)) { event.preventDefault(); return; }
     if (board.gesture) board.resetGesture();
     else if (!board.cancelLink()) {
       if (board.tool !== 'select') changeTool('select');
@@ -1345,7 +1409,7 @@ document.addEventListener('keydown', event => {
 });
 document.addEventListener('keyup', event => { if (event.key === ' ') board.setSpace(false); });
 window.addEventListener('blur', () => { board.setSpace(false); saveDraft(); if (saveTimer) persist(); });
-window.addEventListener('pagehide', () => { saveDraft(); if (saveTimer) persist(); });
+window.addEventListener('pagehide', () => { saveDraft(); if (saveTimer) persist(); agentChat.persist(); });
 
 renderHome();
 if (invalidStorage) toast('旧项目无法读取。当前显示示例，旧数据仍在本机。');

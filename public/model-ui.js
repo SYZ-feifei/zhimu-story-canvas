@@ -31,13 +31,17 @@ export function createModelUI({ modal, show, api, legacyKey, notice, onChange })
     const preferred = item.models.find(model => model.id === item.model);
     const models = preferred ? [preferred, ...item.models.filter(model => model !== preferred)] : item.models;
     return models.map(model => ({ id: model.profileId, name: `${item.name} · ${model.name}`,
-      provider: item.id === 'chatgpt' ? 'openai' : 'gemini', model: model.id }));
+      provider: item.id === 'chatgpt' ? 'openai' : 'gemini', mode: item.id === 'chatgpt' ? 'responses' : 'google-oauth', model: model.id }));
   });
   const ordinary = () => [...directProfiles(), ...profiles.filter(profile => profile.id !== 'agent'), ...(environment ? [environment] : [])];
   const defaultProfile = () => ordinary().find(profile => profile.id === legacy.active) || ordinary()[0] || null;
   const agent = () => profiles.find(profile => profile.id === 'agent');
-  const forNode = (node, models = ordinary()) => node?.kind === 'agent' ? agent()
-    : node?.modelId ? models.find(profile => profile.id === node.modelId) : models.find(profile => profile.id === legacy.active) || models[0];
+  const agentProfiles = (models = ordinary()) => agent() ? [agent(), ...models] : models;
+  const forNode = (node, models = ordinary()) => {
+    const choices = node?.kind === 'agent' ? agentProfiles(models) : models;
+    if (node?.modelId) return choices.find(profile => profile.id === node.modelId);
+    return (node?.kind === 'agent' && agent()) || choices.find(profile => profile.id === legacy.active) || choices[0];
+  };
 
   async function refresh() {
     const results = await Promise.allSettled([
@@ -76,7 +80,7 @@ export function createModelUI({ modal, show, api, legacyKey, notice, onChange })
       </section>
       <section class="settings-section">
         <div class="section-label"><h3>Agent 接口</h3>${agent() ? '' : button('edit-model', '配置 Agent', { glyph: 'plus', style: 'quiet compact', data: idData('agent') })}</div>
-        ${agent() ? modelRow(agent()) : '<p class="muted">Agent 节点使用此处单独配置的接口。</p>'}
+        ${agent() ? modelRow(agent()) : '<p class="muted">可为 Agent 配置独立接口，也可选用已经连接的模型。</p>'}
       </section>
       ${loaded && !persistent ? '<p class="field-hint">开发预览的接口设置在预览服务重启后清空。</p>' : ''}
       ${returnTo ? `<div class="modal-footer">${button('model-return', '返回导入剧本', { glyph: 'arrow-left' })}</div>` : ''}</div>`);
@@ -166,6 +170,12 @@ export function createModelUI({ modal, show, api, legacyKey, notice, onChange })
       ${field('provider', '接口类型', provider, { type: 'select', choices: Object.entries(PROVIDERS).map(([key, item]) => [key, item.label]) })}
       ${field('base', 'API Base URL', profile?.base || PROVIDERS[provider].base, { required: true, max: 500 })}
       ${field('model', '模型 ID', profile?.model, { max: 180, required: true, placeholder: '服务商提供的模型 ID' })}
+      <div id="model-effort-override"${['openai', 'ollama'].includes(provider) ? '' : ' hidden'}>
+        ${field('reasoningLevels', '推理档位（可选）', Array.isArray(profile?.reasoningLevels) ? profile.reasoningLevels.join(', ') : profile?.reasoningLevels, {
+          max: 220, placeholder: '自动识别，或填写 low, medium, high',
+        })}
+        <p class="field-hint">兼容接口可按服务商文档填写原生档位，用逗号分隔。填 off 可隐藏档位。</p>
+      </div>
       ${field('apiKey', 'API Key', '', { type: 'password', max: 2000, placeholder: credentialHint })}
       <p class="modal-error" role="alert" hidden></p><p class="activity-status" role="status" hidden></p>
       <div class="modal-footer">${profile ? button('remove-model', '移除接口', { style: 'danger quiet' }) : ''}
@@ -174,7 +184,11 @@ export function createModelUI({ modal, show, api, legacyKey, notice, onChange })
   }
 
   function currentProfile(form) {
-    return { id: form.dataset.id, ...Object.fromEntries(new FormData(form)) };
+    const { reasoningLevels, ...values } = Object.fromEntries(new FormData(form));
+    const levels = reasoningLevels?.trim();
+    return { id: form.dataset.id, ...values,
+      ...(['openai', 'ollama'].includes(values.provider) && levels ? { reasoningLevels: levels === 'off' ? 'off' :
+        levels.split(/[,，\s]+/).filter(Boolean) } : {}) };
   }
 
   async function change(form, operation) {
@@ -216,6 +230,7 @@ export function createModelUI({ modal, show, api, legacyKey, notice, onChange })
   modal.addEventListener('change', event => {
     if (event.target.id === 'field-provider' && event.target.form?.dataset.form === 'model') {
       $('#field-base', event.target.form).value = PROVIDERS[event.target.value].base;
+      $('#model-effort-override', event.target.form).hidden = !['openai', 'ollama'].includes(event.target.value);
     }
   });
   modal.addEventListener('submit', event => {
@@ -265,6 +280,6 @@ export function createModelUI({ modal, show, api, legacyKey, notice, onChange })
     }
   }
 
-  return { refresh, open, action, ordinary, defaultProfile, forNode,
+  return { refresh, open, action, ordinary, agentProfiles, defaultProfile, forNode,
     modelName: (node, models) => (node?.modelId || node?.kind === 'agent') ? forNode(node, models)?.name || node?.modelSource : node?.modelSource };
 }

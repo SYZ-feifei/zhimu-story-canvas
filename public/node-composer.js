@@ -1,4 +1,5 @@
-import { IDEA_DIRECTIONS, IDEA_LIMIT, NODE_TYPES, PROMPT_LIMIT } from './story.js';
+import { effortChoices, effortLabel, validEffort } from './reasoning.js';
+import { IDEA_DIRECTIONS, IDEA_LIMIT, NODE_TYPES, PLOT_LIMIT, PROMPT_LIMIT } from './story.js';
 import { $, button, escape, icon, iconButton } from './ui.js';
 
 const idData = id => `data-id="${escape(id)}"`;
@@ -21,9 +22,18 @@ function ideaDirectionPicker(active, busy) {
       placeholder="例如 保留人物关系，试试不同结局"></label></div>`;
 }
 
-function ideaCountPicker(count, busy) {
-  return `<label class="idea-count"><span>数量</span><select class="composer-model" id="idea-count"${busy ? ' disabled' : ''}>
-    ${Array.from({ length: IDEA_LIMIT }, (_, index) => `<option value="${index + 1}"${index + 1 === count ? ' selected' : ''}>${index + 1} 条</option>`).join('')}
+function countPicker(id, count, limit, label, busy) {
+  return `<label class="composer-count"><span>数量</span><select class="composer-model" id="${id}" aria-label="${label}"${busy ? ' disabled' : ''}>
+    ${Array.from({ length: limit }, (_, index) => `<option value="${index + 1}"${index + 1 === count ? ' selected' : ''}>${index + 1} 条</option>`).join('')}
+    </select></label>`;
+}
+
+function effortPicker(profile, effort, busy) {
+  const choices = effortChoices(profile);
+  if (!choices.length) return '';
+  const active = validEffort(profile, effort);
+  return `<label class="composer-depth"><span>推理</span><select class="composer-model" id="node-effort" aria-label="推理档位"${busy ? ' disabled' : ''}>
+    ${choices.map(([id, label]) => `<option value="${escape(id)}"${id === active ? ' selected' : ''}>${escape(label)}</option>`).join('')}
     </select></label>`;
 }
 
@@ -42,9 +52,10 @@ function resultMarkup(rounds, round, index, arriving) {
     <div class="composer-candidates">${round.options.map((_, n) => button('show-candidate', `方案 ${n + 1}`, {
       style: 'compact quiet', data: idData(n), extra: `aria-pressed="${n === index}"`,
     })).join('')}${rounds.length > 1 ? `<select class="composer-model" id="round-select" aria-label="生成记录">
-      ${rounds.map((item, n) => `<option value="${item.id}"${round.id === item.id ? ' selected' : ''}>第 ${n + 1} 轮${item.modelSource ? ` · ${escape(item.modelSource)}` : ''}</option>`).join('')}</select>` : ''}</div>
+      ${rounds.map((item, n) => `<option value="${item.id}"${round.id === item.id ? ' selected' : ''}>第 ${n + 1} 轮${item.reasoningEffort ? ` · ${escape(effortLabel(item.reasoningEffort))}` : ''}${item.modelSource ? ` · ${escape(item.modelSource)}` : ''}</option>`).join('')}</select>` : ''}</div>
     <div class="composer-result"><strong>${escape(option.title)}</strong><p>${escape(option.action)}</p>
       <div class="composer-actions">${button('candidate-detail', '查看方案', { style: 'quiet compact' })}
+        ${round.options.length > 1 ? button('branch-all-candidates', '全部建成分支', { style: 'quiet compact' }) : ''}
         ${button('branch-candidate', '创建分支', { glyph: 'git-branch', style: 'compact' })}
         ${button('apply-candidate', '应用到节点', { glyph: 'check', style: 'primary compact' })}</div>
     </div></div>`;
@@ -77,9 +88,7 @@ export class NodeComposer {
     const methodStage = generates && method.stages.length > 0;
     const guided = methodStage && hasGuide;
     const stage = guided && method.stages.find(item => item.id === node.methodStage);
-    const modelControl = node.kind === 'agent'
-      ? `<span class="composer-agent">${icon('sparkle')}${escape(profile?.name || 'Agent')}</span>`
-      : `<select class="composer-model" id="node-model" aria-label="生成模型"${busy ? ' disabled' : ''}>
+    const modelControl = `<select class="composer-model" id="node-model" aria-label="生成模型"${busy ? ' disabled' : ''}>
         ${!profile ? `<option value="">${models.length ? '选择模型' : '尚未配置模型'}</option>` : ''}
         ${models.map(item => `<option value="${item.id}"${profile?.id === item.id ? ' selected' : ''}>${escape(item.name || item.model)}</option>`).join('')}</select>`;
     const placeholder = isIdea ? '写下一句灵感、一个人物或一段剧情，也可直接交给模型发散…'
@@ -117,10 +126,13 @@ export class NodeComposer {
         placeholder="${escape(generates ? prompt : placeholder)}">${escape(generates ? node.prompt : node.script)}</textarea>
       ${isIdea ? ideaDirectionPicker(node.ideaDirection, busy) : ''}
       ${isSynopsis ? `<div class="composer-toolbar">
-        ${modelControl}${button('split-synopsis', '拆成分场', { glyph: 'list-checks', style: 'primary compact', data: idData(node.id), extra: 'aria-haspopup="dialog"' })}</div>` : ''}
-      ${hasModel ? `<div class="composer-toolbar${isIdea ? ' idea-toolbar' : ''}">
-        <div class="composer-actions">${modelControl}${(!models.length || (!profile && node.kind === 'agent')) ? button('user-settings', '用户设置', { style: 'quiet compact' }) : ''}
-          ${isIdea ? ideaCountPicker(node.ideaCount, busy) : ''}</div>
+        <div class="composer-actions composer-config">${modelControl}${effortPicker(profile, node.reasoningEffort, busy)}</div>
+        ${button('split-synopsis', '拆成分场', { glyph: 'list-checks', style: 'primary compact', data: idData(node.id), extra: 'aria-haspopup="dialog"' })}</div>` : ''}
+      ${hasModel ? `<div class="composer-toolbar">
+        <div class="composer-actions composer-config">${modelControl}${models.length ? '' : button('user-settings', '用户设置', { style: 'quiet compact' })}
+          ${effortPicker(profile, node.reasoningEffort, busy)}
+          ${isIdea ? countPicker('idea-count', node.ideaCount, IDEA_LIMIT, '点子数量', busy)
+            : countPicker('plot-count', node.plotCount, PLOT_LIMIT, '剧情方案数量', busy)}</div>
         ${busy ? `<div class="composer-actions"><span class="composer-state" role="status"><span class="activity-dots"><span></span></span>${isIdea ? '正在发散' : '正在生成'}</span>
           ${iconButton('cancel-generation', '停止生成', 'stop')}</div>`
           : button(isIdea ? 'brainstorm' : 'generate', isIdea ? '发散点子' : '生成', { glyph: isIdea ? 'sparkle' : 'arrow-up', style: 'primary compact',

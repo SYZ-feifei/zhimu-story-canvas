@@ -1,4 +1,5 @@
 import { methodFor, normalizeStage } from './methods.js';
+import { cleanEffort } from './reasoning.js';
 
 export const BEATS = {
   A: { name: '失衡开场', short: '开场', color: 'blue', hint: '用一个反常动作入戏，埋下后来会变义的细节。' },
@@ -35,6 +36,12 @@ export const STROKE_LIMIT = 250;
 export const STROKE_POINTS = 450;
 export const IDEA_LIMIT = 8;
 export const DEFAULT_IDEA_COUNT = 3;
+export const PLOT_LIMIT = 8;
+export const DEFAULT_PLOT_COUNT = 3;
+export const AGENT_REFERENCE_LIMIT = 16;
+export const AGENT_HISTORY_LIMIT = 24;
+export const AGENT_REPLY_LIMIT = 12000;
+export const AGENT_HISTORY_CHARS = 100000;
 export const MIN_SCENES = 2;
 export const MAX_SCENES = 12;
 export const DECISION_LIMIT = 800;
@@ -49,12 +56,24 @@ export const IDEA_DIRECTIONS = {
 };
 
 export const isIdeaCount = count => Number.isInteger(count) && count >= 1 && count <= IDEA_LIMIT;
+export const isPlotCount = count => Number.isInteger(count) && count >= 1 && count <= PLOT_LIMIT;
 export const isIdeaDirection = direction => typeof direction === 'string' && Object.hasOwn(IDEA_DIRECTIONS, direction);
 
 const idPattern = /^[a-zA-Z0-9_-]{1,90}$/;
 export const newId = () => globalThis.crypto.randomUUID();
 export const cleanText = (value, limit) => typeof value === 'string' ? value.slice(0, limit).trim() : '';
 export const beatName = (beat) => BEATS[beat]?.name ?? BEATS.scene.name;
+
+export function recentChat(messages, maxChars = AGENT_HISTORY_CHARS) {
+  const history = [];
+  for (let index = messages.length - 2; index >= 0 && history.length < AGENT_HISTORY_LIMIT; index -= 2) {
+    const pair = messages.slice(index, index + 2);
+    maxChars -= pair[0].text.length + pair[1].text.length;
+    if (maxChars < 0) break;
+    history.unshift(...pair);
+  }
+  return history;
+}
 export function mainlineNodes(project) {
   const nodes = new Map(project.nodes.map(node => [node.id, node]));
   return project.mainline.map(id => nodes.get(id)).filter(Boolean);
@@ -97,6 +116,7 @@ export function makeNode(raw = {}) {
       ideaCount: isIdeaCount(raw.ideaCount) ? raw.ideaCount : DEFAULT_IDEA_COUNT,
       ideaDirection: isIdeaDirection(raw.ideaDirection) ? raw.ideaDirection : 'auto',
     } : {}),
+    ...(['plot', 'agent'].includes(kind) ? { plotCount: isPlotCount(raw.plotCount) ? raw.plotCount : DEFAULT_PLOT_COUNT } : {}),
     ...(kind === 'plot' ? {
       sceneHeading: cleanText(raw.sceneHeading, 140),
       audienceInfo: cleanText(raw.audienceInfo, 800),
@@ -106,6 +126,7 @@ export function makeNode(raw = {}) {
     } : {}),
     prompt: cleanText(raw.prompt, PROMPT_LIMIT),
     modelId: idPattern.test(raw.modelId ?? '') ? raw.modelId : null,
+    reasoningEffort: cleanEffort(raw.reasoningEffort),
     modelSource: cleanText(raw.modelSource, 120),
     origin: idPattern.test(raw.origin ?? '') ? raw.origin : null,
     x: Number.isFinite(raw.x) ? raw.x : 0,
@@ -188,13 +209,14 @@ export function normalizeProject(raw) {
   for (const round of Array.isArray(raw.proposals) ? raw.proposals : []) {
     if (!round || typeof round.id !== 'string' || !idPattern.test(round.id) || seenRounds.has(round.id) ||
         (round.focus && !ids.has(round.focus)) || !Array.isArray(round.options)) continue;
-    const options = round.options.filter(option => option && typeof option === 'object').slice(0, 3).map(plotContent);
+    const options = round.options.filter(option => option && typeof option === 'object').slice(0, PLOT_LIMIT).map(plotContent);
     if (!options.length) continue;
     seenRounds.add(round.id);
     proposals.push({ id: round.id, focus: round.focus || null, beat: Object.hasOwn(BEATS, round.beat) ? round.beat : 'scene',
       methodStage: normalizeStage(round.methodStage),
       scope: round.scope === 'next' ? 'next' : 'beat', label: cleanText(round.label, 120), modelSource: cleanText(round.modelSource, 120),
-      modelId: typeof round.modelId === 'string' && idPattern.test(round.modelId) ? round.modelId : null, options });
+      modelId: typeof round.modelId === 'string' && idPattern.test(round.modelId) ? round.modelId : null,
+      reasoningEffort: cleanEffort(round.reasoningEffort), options });
   }
   return {
     schema: 1,
