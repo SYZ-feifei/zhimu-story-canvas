@@ -11,7 +11,10 @@ const additive = event => event.shiftKey || event.ctrlKey || event.metaKey;
 
 function faceMarkup(node, type, summary, stage, model, pinned, busy) {
   const details = [stage, model].filter(Boolean).join(' · ');
-  return `<span class="node-type"><span>${icon(type.icon)}${type.label}</span>${pinned ? '<span class="mainline-tag">主线</span>' : ''}</span>
+  const reviewing = node.reviewStory || node.reviewEmotion;
+  const label = node.sceneHeading ? '分场' : type.label;
+  return `<span class="node-type"><span>${icon(type.icon)}${label}</span>
+    ${reviewing ? '<span class="review-tag">待复核</span>' : pinned ? '<span class="mainline-tag">主线</span>' : ''}</span>
     <strong class="node-title">${escape(node.title)}</strong>
     <span class="node-summary${summary ? '' : ' is-empty'}">${escape(summary || '点击编辑')}</span>
     ${busy ? '<span class="node-meta">正在生成…</span>' : details ? `<span class="node-meta" title="${escape(details)}">
@@ -116,7 +119,7 @@ export class StoryBoard {
       const model = modelLabel(node);
       const stage = stageFor(project.method, node.methodStage)?.label;
       const pinned = this.mainline.has(node.id);
-      const content = [node.kind, node.title, summary, model, stage, pinned, busy];
+      const content = [node.kind, node.title, summary, model, stage, pinned, busy, node.sceneHeading, node.reviewStory, node.reviewEmotion];
       const previous = this.visuals.get(node.id);
       let element = this.elements.get(node.id);
       if (!element) {

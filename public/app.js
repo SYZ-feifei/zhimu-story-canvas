@@ -2,6 +2,7 @@ import { StoryBoard } from './board.js';
 import { CanvasMenu, divider, menuRow } from './canvas-menu.js';
 import { createCommerceUI } from './commerce-ui.js';
 import { demoProject } from './demo.js';
+import { createDevelopment } from './development.js';
 import { EmotionChart } from './emotion.js';
 import { projectHome } from './home.js';
 import { playOpening } from './launch.js';
@@ -12,8 +13,8 @@ import { createModelUI } from './model-ui.js';
 import { NodeComposer, canGenerate } from './node-composer.js';
 import { createScriptImport } from './script-import.js';
 import { BEATS, COLUMN, FORMATS, IDEA_DIRECTIONS, LINK_LIMIT, NODE_HEIGHT, NODE_LIMIT, NODE_TYPES, PROMPT_LIMIT, STROKE_LIMIT, beatName,
-  cleanText, ideaPositions, isIdeaCount, isIdeaDirection, mainlineNodes, makeNode, newId, newProject, normalizeProject, pinNode,
-  positionFor, removeNodes, upstreamNodes } from './story.js';
+  cleanText, developmentContext, hasStory, ideaPositions, isIdeaCount, isIdeaDirection, mainlineNodes, makeNode, markStoryRevisions,
+  newId, newProject, normalizeProject, pinNode, positionFor, removeNodes, upstreamNodes } from './story.js';
 import { $, button, escape, field, icon, iconButton, signed } from './ui.js';
 
 playOpening();
@@ -50,6 +51,10 @@ const board = new StoryBoard({
 const modelUI = createModelUI({ modal, show: showModal, api, legacyKey: legacyModelKey, notice: toast, onChange: () => {
   if (canvasState.screen === 'canvas') { saveDraft(); renderCanvas(); }
 } });
+const development = createDevelopment({
+  modal, show: showModal, close: closeModal, api, profiles: modelUI.ordinary, notice: toast,
+  openSettings: () => modelUI.open(), read: readDevelopment, isCurrent: currentDevelopment, apply: applyDevelopment,
+});
 const commerce = createCommerceUI({ modal, show: showModal, api, notice: toast, onChange: (access, changed) => {
   $('#method-gift').hidden = access.unlocked;
   if (changed && canvasState.screen === 'canvas') { saveDraft(); renderCanvas(); }
@@ -136,6 +141,7 @@ function commit(change) {
   saveDraft();
   const next = structuredClone(project);
   change(next);
+  markStoryRevisions(project, next);
   replaceProject(next);
   if (canvasState.screen === 'canvas') renderCanvas();
   else renderHome();
@@ -154,7 +160,9 @@ function saveDraft() {
   if (old.kind === 'idea') updates.prompt = cleanText(draft.ideaPrompt, PROMPT_LIMIT);
   if (Object.entries(updates).every(([field, value]) => old[field] === value)) return false;
   const nodes = project.nodes.map(node => node.id === old.id ? { ...node, ...updates } : node);
-  replaceProject({ ...project, nodes }, true, true);
+  const next = { ...project, nodes };
+  markStoryRevisions(project, next);
+  replaceProject(next, true, true);
   return true;
 }
 
@@ -170,6 +178,7 @@ function navigateHistory(direction) {
 }
 
 function stopJobs() {
+  development.stop();
   canvasState.generation?.controller.abort();
   canvasState.assessment?.controller.abort();
   canvasState.generation = canvasState.assessment = null;
@@ -235,6 +244,14 @@ function drawCards() {
   canvasState.recent = new Set();
 }
 
+function updateEmotion() {
+  const affected = mainlineNodes(project).filter(node => node.reviewStory || node.reviewEmotion).length;
+  const review = $('#review-mainline');
+  review.hidden = !affected;
+  review.textContent = `${affected} 处待复核`;
+  chart.update(project, canvasState.selected);
+}
+
 function renderCanvas() {
   $('#canvas-empty').hidden = project.nodes.length > 0;
   const activeMethod = methodFor(project.method);
@@ -252,7 +269,7 @@ function renderCanvas() {
   assessButton.disabled = !project.mainline.length;
   assessButton.innerHTML = canvasState.assessment ? `${icon('stop')}<span>停止标注</span>` : `${icon('sparkle')}<span>AI 标注</span>`;
   drawCards();
-  chart.update(project, canvasState.selected);
+  updateEmotion();
   const node = focus();
   const rounds = node ? nodeRounds(node.id) : [];
   const round = currentRound(rounds);
@@ -376,8 +393,13 @@ function canvasMenu(point) {
     menu.show({ ...point, anchor }, [
       menuRow('edit-node', '编辑节点', 'note-pencil', { id: node.id }),
       menuRow('references', '添加参考', 'link-simple', { id: node.id }),
+      ['idea', 'plot'].includes(node.kind) ? menuRow('continue-story', '接着写', 'arrow-bend-down-right', { id: node.id }) : '',
+      ['idea', 'plot'].includes(node.kind) ? menuRow('create-synopsis', '整理为故事梗概', 'paragraph', { id: node.id }) : '',
+      node.kind === 'synopsis' ? menuRow('split-synopsis', '拆成分场', 'list-checks', { id: node.id }) : '',
       node.kind === 'idea' ? menuRow('develop-idea', '展开为剧情节点', 'git-branch', { id: node.id }) : '',
+      node.kind === 'plot' ? menuRow('write-scene', '写成场景正文', 'pen-nib', { id: node.id }) : '',
       node.kind === 'plot' ? menuRow('toggle-mainline', pinned ? '移出主线' : '纳入主线', 'list-numbers', { id: node.id }) : '',
+      node.reviewStory || node.reviewEmotion ? menuRow('chart-node', '查看待复核内容', 'warning-circle', { id: node.id }) : '',
       node.kind === 'plot' ? menuRow('edit-score', '标注情绪与张力', 'wave-sine', { id: node.id }) : '',
       divider, menuRow('delete-node', '删除节点', 'trash', { id: node.id, trailing: 'Delete', danger: true }),
     ].join(''));
@@ -456,6 +478,74 @@ function developIdea(id) {
   board.reveal(node.id);
 }
 
+function readDevelopment(ids, mainline) {
+  saveDraft();
+  if (canvasState.screen !== 'canvas') return null;
+  const sources = (mainline ? project.mainline : ids).map(nodeById);
+  if (!sources.length || sources.some(node => !node)) { toast('请先选中要发展的节点。'); return null; }
+  const sourceIds = sources.map(node => node.id);
+  const route = developmentContext(project, sourceIds);
+  return { ids: sourceIds, sources, snapshot: project, route: JSON.stringify(route),
+    prompt: sources.at(-1).prompt, hasMaterial: [...route.route, ...route.references].some(hasStory),
+    model: modelUI.forNode(sources.at(-1)) };
+}
+
+function currentDevelopment(state) {
+  saveDraft();
+  if (canvasState.screen !== 'canvas' || project.id !== state.snapshot.id) return false;
+  const ids = state.mainline ? project.mainline : state.ids;
+  const source = nodeById(ids.at(-1));
+  return project.method === state.snapshot.method && source?.methodStage === state.sources.at(-1).methodStage &&
+    JSON.stringify(developmentContext(project, ids)) === state.route &&
+    (!['question', 'draft'].includes(state.operation) || source?.prompt === state.prompt) &&
+    (state.operation !== 'scenes' || project.mainline.join('/') === state.snapshot.mainline.join('/'));
+}
+
+function applyDevelopment(state, result, placement, model) {
+  const source = nodeById(state.ids.at(-1));
+  const provenance = { modelId: state.modelId, modelSource: model?.name || model?.model || '' };
+  if (state.operation === 'draft') {
+    commit(next => {
+      const node = next.nodes.find(item => item.id === source.id);
+      Object.assign(node, { script: result.script, ...provenance });
+    });
+    return '已写入场景正文，按 Ctrl+Z 可撤回。';
+  }
+  const isSynopsis = state.operation === 'synopsis';
+  const isSplit = state.operation === 'scenes';
+  const count = isSplit ? result.scenes.length : 1;
+  const neededLinks = isSynopsis ? state.ids.length : count;
+  if (project.nodes.length + count > NODE_LIMIT || project.links.length + neededLinks > LINK_LIMIT) {
+    toast('画布剩余空间不足。可先移除不用的节点或连线。');
+    return null;
+  }
+  let previous = source;
+  const placed = { nodes: [...project.nodes] };
+  const materials = isSplit ? result.scenes : [isSynopsis ? { title: result.title, script: result.body } : result];
+  const nodes = materials.map(item => {
+    const node = makeNode({ ...item, ...provenance, kind: isSynopsis ? 'synopsis' : 'plot', origin: previous.id,
+      ...positionFor(placed, 'scene', previous) });
+    previous = node;
+    placed.nodes.push(node);
+    return node;
+  });
+  const links = isSynopsis ? state.ids.map(from => ({ from, to: nodes[0].id }))
+    : nodes.map(node => ({ from: node.origin, to: node.id }));
+  const nodeIds = nodes.map(node => node.id);
+  assignSelection(isSplit ? [] : nodeIds);
+  canvasState.recent = new Set(nodeIds);
+  commit(next => {
+    next.nodes.push(...nodes);
+    next.links.push(...links);
+    if (placement === 'append') next.mainline.push(...nodeIds);
+    if (placement === 'replace') next.mainline = nodeIds;
+  });
+  if (isSplit) board.fit([source.id, ...nodeIds]);
+  else board.reveal(nodes[0].id);
+  return isSynopsis ? '已建立梗概并连接原路线。'
+    : isSplit ? `已建立 ${nodes.length} 张分场卡，按 Ctrl+Z 可整批撤回。` : '已接出下一场，可在新节点上继续。';
+}
+
 function deleteNodes(ids) {
   const selected = new Set([...ids].filter(nodeById));
   if (!selected.size) return;
@@ -517,7 +607,8 @@ function referencesDialog(id) {
     }
   }
   const existing = refs.map(node => `<div class="list-row">${icon(NODE_TYPES[node.kind].icon)}
-    <span class="list-label"><strong>${escape(node.title)}</strong><small>${direct.has(node.id) ? '直接参考' : '上游参考'}</small></span>
+    <button type="button" class="list-label mainline-scene" data-action="reveal-node" ${idData(node.id)}>
+      <strong>${escape(node.title)}</strong><small>${direct.has(node.id) ? '直接参考' : '上游参考'}</small></button>
     ${direct.has(node.id) ? iconButton('disconnect-reference', `移除参考 ${node.title}`, 'x', idData(node.id)) : ''}</div>`).join('');
   const choices = project.nodes.filter(node => !downstream.has(node.id) && !direct.has(node.id));
   showModal('节点参考', `${existing ? `<div class="reference-list">${existing}</div>` : ''}
@@ -562,12 +653,12 @@ function addStarterQuestion() {
 }
 
 const plotFields = [
-  ['action', '情节动作', 2400], ['reason', '前因', 1400], ['consequence', '后果', 1400],
+  ['action', '情节动作', 2400], ['reason', '前因', 1400], ['consequence', '场尾变化', 1400],
   ['clue', '伏笔与回收', 1200], ['tradeoff', '联动修改', 1200], ['fixedDetails', '沿用细节', 1600],
   ['evidence', '原文依据', 500], ['script', '场景正文', 30000],
 ];
 
-function editNode(id) {
+function editNode(id, openScript = false) {
   selectNode(id);
   const node = focus();
   if (!canGenerate(node)) { $('#composer-body')?.focus(); return; }
@@ -576,10 +667,12 @@ function editNode(id) {
   showModal(`编辑${NODE_TYPES[node.kind].label}节点`, `<form data-form="node" ${idData(id)}>
     ${field('title', '节点标题', node.title, { required: true })}
     ${node.kind === 'plot' && node.beat !== 'scene' ? field('beat', '原节拍', node.beat, { type: 'select', choices: Object.entries(BEATS).map(([key, beat]) => [key, beat.name]) }) : ''}
+    ${node.kind === 'plot' ? field('sceneHeading', '内外景、地点与时段', node.sceneHeading, { max: 140 }) : ''}
     ${plotFields.slice(0, 3).map(textField).join('')}
-    <details class="editor-details"><summary>伏笔、沿用细节与场景正文</summary>${plotFields.slice(3).map(textField).join('')}</details>
+    <details class="editor-details"${openScript ? ' open' : ''}><summary>伏笔、沿用细节与场景正文</summary>${plotFields.slice(3).map(textField).join('')}</details>
     ${pinned ? '<p class="field-hint">主线的每个固定节拍保留一个节点。</p>' : ''}
     ${formFooter('保存节点')}</form>`);
+  if (openScript) $('#field-script', modal).focus();
 }
 
 function scoreDialog(id) {
@@ -589,18 +682,45 @@ function scoreDialog(id) {
     <div class="modal-grid">${field('valence', '情绪（−5 到 +5）', node.valence ?? '', { type: 'number', min: -5, upper: 5 })}
     ${field('tension', '张力（0 到 10）', node.tension ?? '', { type: 'number', min: 0, upper: 10 })}</div>
     ${field('emotionNote', '标注依据', node.emotionNote, { type: 'textarea', max: 800 })}
+    ${field('audienceInfo', '这时观众知道什么', node.audienceInfo, { type: 'textarea', max: 800 })}
+    ${field('emotionTrigger', '哪个行动或发现改变了情绪', node.emotionTrigger, { type: 'textarea', max: 800 })}
     ${formFooter()}</form>`);
+}
+
+function chartScene(id) {
+  selectNode(id, true);
+  const node = nodeById(id);
+  if (node?.kind !== 'plot') return;
+  const lines = [
+    ['场景', node.sceneHeading], ['情节动作', node.action], ['场尾变化', node.consequence],
+    ['观众此时知道', node.audienceInfo], ['情绪变化的触发点', node.emotionTrigger], ['标注依据', node.emotionNote],
+  ];
+  showModal(node.title, `<div class="scene-review">
+    <div class="scene-review-marks"><span>情绪 <strong>${signed(node.valence)}</strong></span>
+      <span>张力 <strong>${node.tension ?? '待标注'}</strong></span></div>
+    ${node.reviewStory || node.reviewEmotion ? `<p class="review-notice">${icon('warning-circle')}
+      ${node.reviewStory && node.reviewEmotion ? '剧情和情绪标注待复核' : node.reviewStory ? '剧情待复核' : '情绪标注待复核'}</p>` : ''}
+    <dl>${lines.filter(([label, text]) => text || ['观众此时知道', '情绪变化的触发点'].includes(label)).map(([label, text]) =>
+      `<dt>${label}</dt><dd>${escape(text || '待标注')}</dd>`).join('')}</dl>
+    <div class="modal-footer">${node.reviewStory ? button('reviewed-story', '确认剧情已复核', { glyph: 'check', data: idData(id) }) : ''}
+      ${button('edit-score', '编辑情绪标注', { data: idData(id) })}
+      ${button('reveal-node', '定位到画布', { glyph: 'arrow-up-right', style: 'primary', data: idData(id) })}</div></div>`);
 }
 
 function mainlineDialog() {
   const nodes = mainlineNodes(project);
-  showModal('主线大纲', `<div class="mainline-list">${nodes.map((node, index) =>
-    `<div class="list-row"><span class="hint">${index + 1}</span><span class="list-label"><strong>${escape(node.title)}</strong>
-    <small>${escape(stageFor(project.method, node.methodStage)?.label || beatName(node.beat))} · 情绪 ${signed(node.valence)} · 张力 ${node.tension ?? '待标注'}</small></span>
+  showModal('主线大纲', `${nodes.length ? `<div class="mainline-tools"><p class="field-hint">拖动序号调整叙事顺序</p>
+    ${button('synopsis-mainline', '整理为梗概', { glyph: 'paragraph', style: 'compact' })}</div>` : ''}
+    <div class="mainline-list">${nodes.map((node, index) =>
+    `<div class="list-row" data-mainline-node="${node.id}">
+    <span class="hint mainline-index" draggable="true" title="拖动调整分场顺序">${icon('dots-six-vertical')}${index + 1}</span>
+    <button class="list-label mainline-scene" type="button" data-action="chart-node" ${idData(node.id)}><strong>${escape(node.title)}</strong>
+    <small>${escape(node.sceneHeading || stageFor(project.method, node.methodStage)?.label || beatName(node.beat))} · 情绪 ${signed(node.valence)} · 张力 ${node.tension ?? '待标注'}
+      ${node.reviewStory || node.reviewEmotion ? ' · 待复核' : ''}</small></button>
     ${button('reorder-up', '上移', { style: 'quiet compact', data: idData(node.id), disabled: index === 0 })}
     ${button('reorder-down', '下移', { style: 'quiet compact', data: idData(node.id), disabled: index === nodes.length - 1 })}
     ${iconButton('edit-score', '标注情绪与张力', 'wave-sine', idData(node.id))}</div>`).join('')
-    || '<p class="muted">右键点击剧情节点，选择「纳入主线」。</p>'}</div>`);
+    || '<p class="muted">右键点击剧情节点，选择「纳入主线」。</p>'}</div>`, true);
 }
 
 function toggleMainline(id) {
@@ -617,9 +737,15 @@ function toggleMainline(id) {
 function reorder(id, delta) {
   const index = project.mainline.indexOf(id);
   const to = index + delta;
-  if (index < 0 || to < 0 || to >= project.mainline.length) return;
-  commit(next => { [next.mainline[index], next.mainline[to]] = [next.mainline[to], next.mainline[index]]; });
+  if (index < 0 || to < 0 || to >= project.mainline.length || index === to) return;
+  commit(next => {
+    next.mainline.splice(index, 1);
+    next.mainline.splice(to, 0, id);
+  });
   mainlineDialog();
+  const row = $(`[data-mainline-node="${id}"]`, modal);
+  row?.scrollIntoView({ block: 'nearest' });
+  $('.mainline-scene', row || modal)?.focus({ preventScroll: true });
 }
 
 function confirmDeleteProject(id, title) {
@@ -804,7 +930,7 @@ async function assess() {
     const byId = new Map(marks.map(({ id, ...mark }) => [id, mark]));
     canvasState.assessment = null;
     commit(next => {
-      for (const node of next.nodes) if (byId.has(node.id)) Object.assign(node, byId.get(node.id));
+      for (const node of next.nodes) if (byId.has(node.id)) Object.assign(node, byId.get(node.id), { reviewEmotion: false });
     });
     toast(`已标注 ${marks.length} 个主线节点`);
   } catch (error) {
@@ -937,7 +1063,8 @@ modal.addEventListener('submit', event => {
     if (type === 'score') {
       const valence = value(data, 'valence'), tension = value(data, 'tension');
       Object.assign(node, { valence: valence ? Number(valence) : null, tension: tension ? Number(tension) : null,
-        emotionNote: value(data, 'emotionNote') });
+        emotionNote: value(data, 'emotionNote'), audienceInfo: value(data, 'audienceInfo'),
+        emotionTrigger: value(data, 'emotionTrigger'), reviewEmotion: false });
       return;
     }
     const beat = value(data, 'beat');
@@ -945,6 +1072,7 @@ modal.addEventListener('submit', event => {
     const hasPeer = beat !== 'scene' && mainlineNodes(next).some(item => item.id !== id && item.beat === beat);
     if (node.kind === 'plot' && Object.hasOwn(BEATS, beat) && !(wasPinned && hasPeer)) node.beat = beat;
     node.title = value(data, 'title') || node.title;
+    if (node.kind === 'plot') node.sceneHeading = value(data, 'sceneHeading');
     for (const [key] of plotFields) node[key] = value(data, key);
   });
 });
@@ -967,7 +1095,7 @@ document.addEventListener('input', event => {
     composer.position(board);
   }
   clearTimeout(draftTimer);
-  draftTimer = setTimeout(() => { if (saveDraft() && !board.gesture) drawCards(); }, 540);
+  draftTimer = setTimeout(() => { if (saveDraft() && !board.gesture) { drawCards(); updateEmotion(); } }, 540);
 });
 
 document.addEventListener('change', event => {
@@ -982,7 +1110,7 @@ document.addEventListener('change', event => {
     const id = canvasState.selected;
     const stage = stageFor(project.method, event.target.value);
     commit(next => { next.nodes.find(node => node.id === id).methodStage = stage?.id || ''; });
-  } else if (event.target.id === 'node-model' && ['plot', 'idea'].includes(focus()?.kind)) {
+  } else if (event.target.id === 'node-model' && ['plot', 'idea', 'synopsis'].includes(focus()?.kind)) {
     const id = canvasState.selected;
     const modelId = event.target.value || null;
     commit(next => { next.nodes.find(node => node.id === id).modelId = modelId; });
@@ -1004,6 +1132,30 @@ importFile.addEventListener('change', () => {
   void openFile(file);
 });
 
+let draggedScene = null;
+modal.addEventListener('dragstart', event => {
+  if (!event.target.closest('.mainline-index')) return;
+  draggedScene = event.target.closest('[data-mainline-node]').dataset.mainlineNode;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', draggedScene);
+});
+modal.addEventListener('dragover', event => {
+  if (!draggedScene || !event.target.closest('[data-mainline-node]')) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+});
+modal.addEventListener('dragend', () => { draggedScene = null; });
+modal.addEventListener('drop', event => {
+  const target = event.target.closest('[data-mainline-node]')?.dataset.mainlineNode;
+  if (!draggedScene || !target) return;
+  event.preventDefault();
+  const id = draggedScene;
+  draggedScene = null;
+  const from = project.mainline.indexOf(id);
+  const to = project.mainline.indexOf(target);
+  if (from >= 0 && to >= 0) reorder(id, to - from);
+});
+
 document.addEventListener('click', event => {
   const control = event.target.closest('[data-action]');
   if (!control || control.disabled) return;
@@ -1012,6 +1164,7 @@ document.addEventListener('click', event => {
   if (wasMenuItem) menu.close();
   if (modelUI.action(action, control)) return;
   if (commerce.action(action, control)) return;
+  if (development.action(action, control)) return;
   switch (action) {
     case 'home': goHome(); break;
     case 'account':
@@ -1073,6 +1226,12 @@ document.addEventListener('click', event => {
     case 'reveal-node': closeModal(); selectNode(id, true); board.viewport.focus({ preventScroll: true }); break;
     case 'close-composer': selectNode(null); board.viewport.focus({ preventScroll: true }); break;
     case 'edit-node': editNode(id); break;
+    case 'continue-story': development.open('question', [id]); break;
+    case 'create-synopsis': development.open('synopsis', [id]); break;
+    case 'synopsis-mainline': development.open('synopsis', project.mainline, true); break;
+    case 'split-synopsis': development.open('scenes', [id]); break;
+    case 'write-scene': development.open('draft', [id]); break;
+    case 'view-scene-script': editNode(id, true); break;
     case 'delete-node': deleteNodes([id]); break;
     case 'delete-selection': deleteNodes(canvasState.selection); break;
     case 'references': referencesDialog(id); break;
@@ -1090,7 +1249,13 @@ document.addEventListener('click', event => {
     case 'reorder-up': reorder(id, -1); break;
     case 'reorder-down': reorder(id, 1); break;
     case 'edit-score': scoreDialog(id); break;
-    case 'chart-node': selectNode(id, true); break;
+    case 'chart-node': chartScene(id); break;
+    case 'reviewed-story':
+      if (nodeById(id)?.reviewStory) {
+        commit(next => { next.nodes.find(node => node.id === id).reviewStory = false; });
+        chartScene(id);
+      }
+      break;
     case 'toggle-chart': saveDraft(); canvasState.chartOpen = !canvasState.chartOpen; renderCanvas(); break;
     case 'fit': board.fit(); board.viewport.focus({ preventScroll: true }); break;
     case 'zoom-in': board.zoomBy(1.2); break;

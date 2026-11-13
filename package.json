@@ -1,6 +1,6 @@
 {
   "name": "zhimu-story-canvas",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "description": "枝幕 · 面向剧本开发的多模型故事画布",
   "type": "module",

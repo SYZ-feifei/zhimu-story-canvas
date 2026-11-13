@@ -21,6 +21,7 @@ export const NODE_TYPES = {
   text: { label: '文本', icon: 'text-aa', title: '文本节点' },
   idea: { label: '点子', icon: 'lightbulb', title: '新点子' },
   setting: { label: '共享设定', icon: 'bookmark-simple', title: '共享设定' },
+  synopsis: { label: '梗概', icon: 'paragraph', title: '故事梗概' },
   plot: { label: '剧情', icon: 'film-strip', title: '剧情节点' },
   agent: { label: 'Agent', icon: 'sparkle', title: 'Agent' },
 };
@@ -34,6 +35,10 @@ export const STROKE_LIMIT = 250;
 export const STROKE_POINTS = 450;
 export const IDEA_LIMIT = 8;
 export const DEFAULT_IDEA_COUNT = 3;
+export const MIN_SCENES = 2;
+export const MAX_SCENES = 12;
+export const DECISION_LIMIT = 800;
+export const SYNOPSIS_LIMIT = 5000;
 export const IDEA_DIRECTIONS = {
   auto: { label: '模型自由想', guidance: '自由选择切入点。围绕现有素材找出不同的故事可能。素材很少或为空时，直接提出各自能独立成立的故事种子。' },
   plot: { label: '剧情走向', guidance: '给出不同的触发事件、人物决定或后续走向，并说明它会怎样改变局势。' },
@@ -91,6 +96,13 @@ export function makeNode(raw = {}) {
     ...(kind === 'idea' ? {
       ideaCount: isIdeaCount(raw.ideaCount) ? raw.ideaCount : DEFAULT_IDEA_COUNT,
       ideaDirection: isIdeaDirection(raw.ideaDirection) ? raw.ideaDirection : 'auto',
+    } : {}),
+    ...(kind === 'plot' ? {
+      sceneHeading: cleanText(raw.sceneHeading, 140),
+      audienceInfo: cleanText(raw.audienceInfo, 800),
+      emotionTrigger: cleanText(raw.emotionTrigger, 800),
+      reviewStory: raw.reviewStory === true,
+      reviewEmotion: raw.reviewEmotion === true,
     } : {}),
     prompt: cleanText(raw.prompt, PROMPT_LIMIT),
     modelId: idPattern.test(raw.modelId ?? '') ? raw.modelId : null,
@@ -293,6 +305,68 @@ export function upstreamNodes(project, targets) {
   }
   for (const target of targets) seen.delete(target);
   return project.nodes.filter(node => seen.has(node.id));
+}
+
+export function storyMaterial(node) {
+  return { id: node.id, kind: node.kind, title: node.title, sceneHeading: node.sceneHeading, action: node.action,
+    reason: node.reason, consequence: node.consequence, clue: node.clue, tradeoff: node.tradeoff,
+    fixedDetails: node.fixedDetails, evidence: node.evidence, script: node.script };
+}
+
+export function developmentContext(project, ids) {
+  const nodes = new Map(project.nodes.map(node => [node.id, node]));
+  const route = ids.map(id => nodes.get(id)).filter(Boolean);
+  const references = upstreamNodes(project, ids);
+  const included = new Set([...ids, ...references.map(node => node.id)]);
+  return { format: project.format, route: route.map(storyMaterial), references: references.map(storyMaterial),
+    links: project.links.filter(({ from, to }) => included.has(from) && included.has(to)) };
+}
+
+export const hasStory = node => Boolean(node.action || node.reason || node.consequence || node.clue || node.fixedDetails || node.script);
+
+const revisionFields = ['title', 'sceneHeading', 'action', 'reason', 'consequence', 'clue', 'fixedDetails', 'script', 'evidence'];
+
+export function markStoryRevisions(before, next) {
+  const priorNodes = new Map(before.nodes.map(node => [node.id, node]));
+  const edited = new Set(next.nodes.filter(node => {
+    const old = priorNodes.get(node.id);
+    return old && (hasStory(old) || hasStory(node)) && revisionFields.some(key => old[key] !== node[key]);
+  }).map(node => node.id));
+  const affected = new Set();
+  const beforeLinks = new Set(before.links.map(({ from, to }) => `${from}/${to}`));
+  const afterLinks = new Set(next.links.map(({ from, to }) => `${from}/${to}`));
+  for (const { from, to } of before.links) if (!afterLinks.has(`${from}/${to}`)) affected.add(to);
+  for (const { from, to } of next.links) if (priorNodes.has(to) && !beforeLinks.has(`${from}/${to}`)) affected.add(to);
+  const outgoing = new Map();
+  for (const { from, to } of next.links) {
+    if (!outgoing.has(from)) outgoing.set(from, []);
+    outgoing.get(from).push(to);
+  }
+  const reached = new Set([...edited, ...affected]);
+  for (const id of reached) {
+    for (const child of outgoing.get(id) || []) {
+      affected.add(child);
+      reached.add(child);
+    }
+  }
+  const oldMainline = new Set(before.mainline);
+  for (const [index, id] of next.mainline.entries()) {
+    if (before.mainline[index] !== id && oldMainline.has(id)) affected.add(id);
+  }
+  let earlierChanged = false;
+  const reviewMarks = new Set();
+  for (const [index, id] of next.mainline.entries()) {
+    if (earlierChanged && oldMainline.has(id)) reviewMarks.add(id);
+    earlierChanged ||= reached.has(id) || before.mainline[index] !== id;
+  }
+  if (!affected.size && !edited.size && !reviewMarks.size) return;
+  next.nodes = next.nodes.map(node => {
+    if (node.kind !== 'plot' || !priorNodes.has(node.id)) return node;
+    const reviewStory = node.reviewStory || affected.has(node.id);
+    const hasMark = node.valence !== null || node.tension !== null || node.emotionNote || node.audienceInfo || node.emotionTrigger;
+    const reviewEmotion = node.reviewEmotion || Boolean(hasMark && (edited.has(node.id) || affected.has(node.id) || reviewMarks.has(node.id)));
+    return reviewStory === node.reviewStory && reviewEmotion === node.reviewEmotion ? node : { ...node, reviewStory, reviewEmotion };
+  });
 }
 
 export function arrange(project) {

@@ -36,8 +36,8 @@ export class EmotionChart {
   update(project, selected) {
     const nodes = mainlineNodes(project);
     const focus = project.mainline.includes(selected) ? selected : null;
-    const signature = JSON.stringify([project.method, focus, nodes.map(({ id, title, beat, methodStage, valence, tension, emotionNote }) =>
-      [id, title, beat, methodStage, valence, tension, emotionNote])]);
+    const signature = JSON.stringify([project.method, focus, nodes.map(({ id, title, beat, methodStage, valence, tension, emotionNote,
+      reviewStory, reviewEmotion }) => [id, title, beat, methodStage, valence, tension, emotionNote, reviewStory, reviewEmotion])]);
     if (this.signature === signature) return;
     this.signature = signature;
     this.nodes = nodes;
@@ -100,8 +100,10 @@ export class EmotionChart {
     }
     this.points.innerHTML = points.map(({ node, x }) => {
       const stage = stageFor(this.method, node.methodStage);
-      const label = `${node.title}${stage ? `，${stage.label}` : ''}，情绪 ${signed(node.valence)}，张力 ${node.tension ?? '待标注'}${node.emotionNote ? `。${node.emotionNote}` : ''}`;
-      return `<button type="button" class="chart-point" data-action="chart-node" data-id="${node.id}" title="${escape(label)}" aria-label="${escape(label)}" style="left:${x - step / 2}px;width:${step}px"></button>`;
+      const review = node.reviewStory || node.reviewEmotion;
+      const label = `${node.title}${stage ? `，${stage.label}` : ''}，情绪 ${signed(node.valence)}，张力 ${node.tension ?? '待标注'}${review ? '，待复核' : ''}${node.emotionNote ? `。${node.emotionNote}` : ''}`;
+      return `<button type="button" class="chart-point${review ? ' needs-review' : ''}" data-action="chart-node" data-id="${node.id}"
+        title="${escape(label)}" aria-label="${escape(label)}" aria-haspopup="dialog" style="left:${x - step / 2}px;width:${step}px"></button>`;
     }).join('');
   }
 }

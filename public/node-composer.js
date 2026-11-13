@@ -69,6 +69,8 @@ export class NodeComposer {
     const focused = !changed && previous?.id ? { id: previous.id, start: previous.selectionStart, end: previous.selectionEnd } : null;
     const generates = canGenerate(node);
     const isIdea = node.kind === 'idea';
+    const isSynopsis = node.kind === 'synopsis';
+    const isPlot = node.kind === 'plot';
     const hasModel = generates || isIdea;
     const busy = job?.nodeId === node.id;
     const type = NODE_TYPES[node.kind];
@@ -81,20 +83,28 @@ export class NodeComposer {
         ${!profile ? `<option value="">${models.length ? '选择模型' : '尚未配置模型'}</option>` : ''}
         ${models.map(item => `<option value="${item.id}"${profile?.id === item.id ? ' selected' : ''}>${escape(item.name || item.model)}</option>`).join('')}</select>`;
     const placeholder = isIdea ? '写下一句灵感、一个人物或一段剧情，也可直接交给模型发散…'
+      : isSynopsis ? '写下从故事开头到结局的梗概…'
       : node.kind === 'setting' ? '写入需要下游遵守的人物、关系、规则或已定事实…' : '写入正文或参考素材…';
     const prompt = stage?.question || (guided ? method.start : '描述这一拍的目标、冲突或想发散的方向…');
     this.element.innerHTML = `<div class="composer-top">${icon(type.icon)}
       <input class="composer-title" id="composer-title" value="${escape(node.title)}" aria-label="节点标题" maxlength="100">
       ${generates ? iconButton('edit-node', '编辑节点详情', 'note-pencil', idData(node.id)) : ''}
+      ${isIdea || isPlot ? button('continue-story', '接着写', { glyph: 'arrow-bend-down-right', style: 'compact composer-continue', data: idData(node.id), extra: 'aria-haspopup="dialog"' }) : ''}
+      ${isIdea || isPlot ? iconButton('create-synopsis', '整理为故事梗概', 'paragraph', idData(node.id)) : ''}
+      ${isPlot && node.script ? iconButton('view-scene-script', '查看场景正文', 'file-text', idData(node.id)) : ''}
+      ${isPlot ? iconButton('write-scene', '写成场景正文', 'pen-nib', idData(node.id)) : ''}
       ${isIdea ? iconButton('develop-idea', '展开为剧情节点', 'git-branch', idData(node.id)) : ''}
       ${iconButton('close-composer', '关闭节点编辑', 'x')}</div>
       <div class="composer-refs">
         ${button('references', '添加参考', { glyph: 'plus', style: 'quiet compact', data: idData(node.id) })}
-        ${refs.map(ref => `<span class="ref-chip" title="${escape(ref.title)}">${icon(NODE_TYPES[ref.kind].icon)}
-          <span>${escape(ref.title)}</span><button type="button" data-action="disconnect" ${idData(ref.id)}
+        ${refs.map(ref => `<span class="ref-chip">
+          <button type="button" class="ref-link" data-action="reveal-node" ${idData(ref.id)} title="定位参考 ${escape(ref.title)}">
+            ${icon(NODE_TYPES[ref.kind].icon)}<span>${escape(ref.title)}</span></button>
+          <button type="button" data-action="disconnect" ${idData(ref.id)}
           aria-label="移除参考 ${escape(ref.title)}">${icon('x')}</button></span>`).join('')}
         ${indirect ? `<span class="hint" title="沿已有连线传入的间接参考">另含 ${indirect} 个上游</span>` : ''}
       </div>
+      ${isPlot && node.sceneHeading ? `<p class="composer-scene-heading">${icon('map-pin')}${escape(node.sceneHeading)}</p>` : ''}
       ${guided ? `<div class="composer-method"><select class="composer-model" id="node-stage" aria-label="创作方法阶段"${busy ? ' disabled' : ''}>
         <option value="">${escape(method.name)} · 自选阶段</option>
         ${method.stages.map(item => `<option value="${item.id}"${stage?.id === item.id ? ' selected' : ''}>${escape(item.label)}</option>`).join('')}</select>
@@ -106,6 +116,8 @@ export class NodeComposer {
         aria-label="${isIdea ? '点子正文' : generates ? '生成要求' : '节点正文'}"
         placeholder="${escape(generates ? prompt : placeholder)}">${escape(generates ? node.prompt : node.script)}</textarea>
       ${isIdea ? ideaDirectionPicker(node.ideaDirection, busy) : ''}
+      ${isSynopsis ? `<div class="composer-toolbar">
+        ${modelControl}${button('split-synopsis', '拆成分场', { glyph: 'list-checks', style: 'primary compact', data: idData(node.id), extra: 'aria-haspopup="dialog"' })}</div>` : ''}
       ${hasModel ? `<div class="composer-toolbar${isIdea ? ' idea-toolbar' : ''}">
         <div class="composer-actions">${modelControl}${(!models.length || (!profile && node.kind === 'agent')) ? button('user-settings', '用户设置', { style: 'quiet compact' }) : ''}
           ${isIdea ? ideaCountPicker(node.ideaCount, busy) : ''}</div>
